@@ -88,7 +88,7 @@ const STATIC_POSTS: Post[] = [
     title: "4月可是 SummerIntern 捡漏黄金期！",
     author: "是个上岸栗子",
     likes: 21,
-    ratio: 1.05,
+    ratio: 1.334,
     tintA: "#B8D4E8", tintB: "#A0C4E0",
     imageSource: require("../../assets/posts/summerintern.png"),
   },
@@ -97,7 +97,7 @@ const STATIC_POSTS: Post[] = [
     title: "claude code 的团队模式真的赶快用！！！",
     author: "jesse-菲美信息",
     likes: 1276,
-    ratio: 1.3,
+    ratio: 1.391,
     tintA: "#1A1A2E", tintB: "#0D0D1A",
     imageSource: require("../../assets/posts/claude-code.png"),
   },
@@ -151,7 +151,7 @@ const STATIC_POSTS: Post[] = [
     title: "手抓拉塞尔F1真车 | 帝国理工造赛车年 vlog",
     author: "艾仔壳",
     likes: 4893,
-    ratio: 1.35,
+    ratio: 1.323,
     tintA: "#1A3050", tintB: "#0A1828",
     isVideo: true,
     imageSource: require("../../assets/posts/imperial-f1.png"),
@@ -161,7 +161,7 @@ const STATIC_POSTS: Post[] = [
     title: "上海 00后 UCL 海归情侣 今天身价多少钱",
     author: "拜托了姐妹",
     likes: 1492,
-    ratio: 1.55,
+    ratio: 1.355,
     tintA: "#E8D4C0", tintB: "#C4A882",
     isVideo: true,
     imageSource: require("../../assets/posts/ucl-couple.png"),
@@ -171,7 +171,7 @@ const STATIC_POSTS: Post[] = [
     title: "Cambridge · Harvard · Yale 大佬背景大赏",
     author: "又逢春",
     likes: 136,
-    ratio: 1.15,
+    ratio: 1.340,
     tintA: "#B0C8E8", tintB: "#8AAAC8",
     imageSource: require("../../assets/posts/linkedin-dalao.png"),
   },
@@ -180,7 +180,7 @@ const STATIC_POSTS: Post[] = [
     title: "求求了😭香港中学真的不是你想进就能进！",
     author: "欣益妈国际教育说",
     likes: 236,
-    ratio: 1.65,
+    ratio: 1.339,
     tintA: "#E8D4D4", tintB: "#C8A0A0",
     imageSource: require("../../assets/posts/hk-school.png"),
   },
@@ -189,7 +189,7 @@ const STATIC_POSTS: Post[] = [
     title: "剑桥 IC offer holder 被 UCL 拒绝",
     author: "乘一点耐心一点",
     likes: 131,
-    ratio: 1.0,
+    ratio: 1.359,
     tintA: "#C8D8E8", tintB: "#98B0C8",
     imageSource: require("../../assets/posts/ucas-offers.png"),
   },
@@ -198,7 +198,7 @@ const STATIC_POSTS: Post[] = [
     title: "港大生在 J.P. Morgan 被狠狠上了一课🥲",
     author: "11是伊伊",
     likes: 401,
-    ratio: 1.45,
+    ratio: 1.337,
     tintA: "#1A1A2E", tintB: "#0D0D1A",
     imageSource: require("../../assets/posts/jpmorgan.png"),
   },
@@ -207,7 +207,7 @@ const STATIC_POSTS: Post[] = [
     title: "港三本有任何机会进 Goldman Sachs 吗？",
     author: "港漂打工人",
     likes: 892,
-    ratio: 1.2,
+    ratio: 1.312,
     tintA: "#C8D8E8", tintB: "#98B8D8",
     imageSource: require("../../assets/posts/goldman-question.png"),
   },
@@ -346,10 +346,7 @@ function PostCard({ post }: { post: Post }) {
         {post.imageSource ? (
           <Image
             source={post.imageSource}
-            style={[
-              StyleSheet.absoluteFill,
-              post.imageOffsetY ? { transform: [{ translateY: post.imageOffsetY }] } : undefined,
-            ]}
+            style={{ width: "100%", height: "100%" }}
             resizeMode="cover"
           />
         ) : post.gradientCard ? (
@@ -464,8 +461,8 @@ const styles = StyleSheet.create({
   grid: { flexDirection: "row", gap: SPACING.sm },
   col: { flex: 1, gap: SPACING.md },
 
-  card: { borderRadius: RADII.md, overflow: "hidden" },
-  thumbWrap: { width: "100%", borderRadius: RADII.md, overflow: "hidden" },
+  card: { width: "100%", alignSelf: "stretch", borderRadius: RADII.md, overflow: "hidden" },
+  thumbWrap: { width: "100%", alignSelf: "stretch", borderRadius: RADII.md, overflow: "hidden" },
 
   gradientCardInner: {
     ...StyleSheet.absoluteFillObject,
