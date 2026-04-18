@@ -14,29 +14,15 @@ import { COLORS } from "./src/constants/theme";
 import { loadVoiceSettings } from "./src/services/voiceSettings";
 
 export type AssistantAction = {
-  type:
-    | "navigate_tab"
-    | "go_live"
-    | "end_stream"
-    | "mute"
-    | "unmute"
-    | "flip_camera"
-    | "create_poll"
-    | "close_poll"
-    | "emoji_mode"
-    | "hype"
-    | "shoutout"
-    | "countdown"
-    | "take_photos"
-    | "identify_outfit"
-    | "none";
+  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "create_poll" | "close_poll" | "emoji_mode" | "hype" | "shoutout" | "countdown" | "pull_up_clip" | "none";
   tab?: Tab;
   poll?: { question: string; options: string[] };
   /** for shoutout: the username to shout out */
   user?: string;
   /** for countdown: seconds (default 5) */
   seconds?: number;
-  photos?: { poses: string[] };
+  /** for pull_up_clip: search query extracted from voice command */
+  query?: string;
 };
 
 export default function App() {

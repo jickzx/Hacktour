@@ -25,8 +25,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII } from "../constants/theme";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
-import { getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings } from "../services/voiceSettings";
-import { uploadPhoto, editPhoto, identifyOutfit, OutfitItem } from "../services/api";
+import ClipOverlay from "../components/ClipOverlay";
+import { searchClips } from "../services/api";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -116,20 +116,9 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const activePollRef = useRef(activePoll);
   const [latestAiComment, setLatestAiComment] = useState<string | undefined>();
   const [emojiMode, setEmojiMode] = useState(false);
-  const [showCommands, setShowCommands] = useState(false);
-  const [copilot, setCopilot] = useState<{ suggestedReply: string; chatSummary: string; modAlert: string | null } | null>(null);
-  const recentCommentsRef = useRef<string[]>([]);
-  const [photoSession, setPhotoSession] = useState<{
-    pose: string;
-    index: number;
-    total: number;
-    phase: "pose" | "waiting" | "capturing" | "editing" | "done";
+  const [activeClip, setActiveClip] = useState<{
+    id: string; title: string; sourceVideoUrl: string; durationSeconds: number; score: number;
   } | null>(null);
-  const [flashOpacity] = useState(new Animated.Value(0));
-  const photoSessionRef = useRef(false);
-  const readyResolverRef = useRef<((result: "ready" | "stop" | "timeout") => void) | null>(null);
-  const [outfitScanning, setOutfitScanning] = useState(false);
-  const outfitBusyRef = useRef(false);
   isLiveRef.current = isLive;
   activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
@@ -286,6 +275,33 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     }
   }, [pushComment]);
 
+  // ── Pull up clip: vector search the clip library ────────────────────────────
+
+  const handlePullUpClip = useCallback(async (query: string) => {
+    console.log(`[ClipOverlay] Searching for: "${query}"`);
+    pushComment({ id: `zee-clip-${Date.now()}`, user: "⚡ Zee", text: `🔍 Searching clips for "${query}"…`, avatar: "🤖" });
+
+    try {
+      const results = await searchClips(query, 1);
+      if (!results || results.length === 0) {
+        pushComment({ id: `zee-clip-miss-${Date.now()}`, user: "⚡ Zee", text: "Couldn't find a matching clip 😅", avatar: "🤖" });
+        return;
+      }
+      const best = results[0];
+      console.log(`[ClipOverlay] Best match: "${best.title}" (score: ${best.score.toFixed(3)})`);
+      setActiveClip({
+        id: best.id,
+        title: best.title,
+        sourceVideoUrl: best.sourceVideoUrl ?? "",
+        durationSeconds: best.durationSeconds,
+        score: best.score,
+      });
+    } catch (err) {
+      console.warn("[ClipOverlay] Search error:", err);
+      pushComment({ id: `zee-clip-err-${Date.now()}`, user: "⚡ Zee", text: "Clip search failed — try again!", avatar: "🤖" });
+    }
+  }, [pushComment]);
+
   // ── Assistant: handle pendingAction from App.tsx ─────────────────────────────
 
   useEffect(() => {
@@ -304,16 +320,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       case "hype":         triggerHype(); break;
       case "shoutout":     if (pendingAction.user) triggerShoutout(pendingAction.user); break;
       case "countdown":    triggerCountdown(pendingAction.seconds ?? 5); break;
-      case "take_photos": {
-        const poses = pendingAction.photos?.poses?.length
-          ? pendingAction.photos.poses
-          : ["big smile", "look over your shoulder", "peace sign", "candid laugh"];
-        if (!photoSessionRef.current) startPhotoSession(poses);
-        break;
-      }
-      case "identify_outfit":
-        scanOutfit();
-        break;
+      case "pull_up_clip": if (pendingAction.query) handlePullUpClip(pendingAction.query); break;
     }
     onPendingActionConsumed();
   }, [pendingAction]); // eslint-disable-line
@@ -838,28 +845,12 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
           />
         )}
 
-        {/* Copilot insights panel */}
-        {isLive && copilot && !assistantActive && (
-          <View style={styles.copilotPanel} pointerEvents="none">
-            {copilot.modAlert && (
-              <View style={styles.copilotRow}>
-                <Text style={styles.copilotLabel}>⚠️ MOD</Text>
-                <Text style={styles.copilotAlertText} numberOfLines={2}>{copilot.modAlert}</Text>
-              </View>
-            )}
-            {copilot.chatSummary ? (
-              <View style={styles.copilotRow}>
-                <Text style={styles.copilotLabel}>💬</Text>
-                <Text style={styles.copilotText} numberOfLines={2}>{copilot.chatSummary}</Text>
-              </View>
-            ) : null}
-            {copilot.suggestedReply ? (
-              <View style={styles.copilotRow}>
-                <Text style={styles.copilotLabel}>🐼</Text>
-                <Text style={[styles.copilotText, styles.copilotSuggest]} numberOfLines={2}>{copilot.suggestedReply}</Text>
-              </View>
-            ) : null}
-          </View>
+        {/* Clip overlay */}
+        {activeClip && (
+          <ClipOverlay
+            clip={activeClip}
+            onClose={() => setActiveClip(null)}
+          />
         )}
 
         {/* Emoji mode banner */}
