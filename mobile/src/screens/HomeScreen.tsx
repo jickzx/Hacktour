@@ -85,17 +85,12 @@ const STATIC_POSTS: Post[] = [
   },
   {
     id: "f2",
-    title: "我先投了，4月才是真正的「捡漏月」",
+    title: "4月可是 SummerIntern 捡漏黄金期！",
     author: "是个上岸栗子",
     likes: 21,
     ratio: 1.05,
     tintA: "#B8D4E8", tintB: "#A0C4E0",
-    textCard: {
-      bg: "#EDF6FF",
-      textColor: "#1A5F8A",
-      secondaryText: "4月可是 🇭🇰",
-      cardText: "SummerIntern\n捡漏黄金期!",
-    },
+    imageSource: require("../../assets/posts/summerintern.png"),
   },
   {
     id: "f3",
@@ -105,7 +100,6 @@ const STATIC_POSTS: Post[] = [
     ratio: 1.3,
     tintA: "#1A1A2E", tintB: "#0D0D1A",
     imageSource: require("../../assets/posts/claude-code.png"),
-    imageOffsetY: -30,
   },
   {
     id: "f4",
@@ -161,7 +155,6 @@ const STATIC_POSTS: Post[] = [
     tintA: "#1A3050", tintB: "#0A1828",
     isVideo: true,
     imageSource: require("../../assets/posts/imperial-f1.png"),
-    imageOffsetY: -25,
   },
   {
     id: "f8",
@@ -172,21 +165,15 @@ const STATIC_POSTS: Post[] = [
     tintA: "#E8D4C0", tintB: "#C4A882",
     isVideo: true,
     imageSource: require("../../assets/posts/ucl-couple.png"),
-    imageOffsetY: -20,
   },
   {
     id: "f9",
-    title: "投行",
+    title: "Cambridge · Harvard · Yale 大佬背景大赏",
     author: "又逢春",
     likes: 136,
     ratio: 1.15,
     tintA: "#B0C8E8", tintB: "#8AAAC8",
-    textCard: {
-      bg: "#F0F5FF",
-      textColor: "#1A3060",
-      secondaryText: "投行",
-      cardText: "港三本有任何\n机会进hk\nGoldman Sachs\n吗？🙇",
-    },
+    imageSource: require("../../assets/posts/linkedin-dalao.png"),
   },
   {
     id: "f10",
@@ -196,20 +183,15 @@ const STATIC_POSTS: Post[] = [
     ratio: 1.65,
     tintA: "#E8D4D4", tintB: "#C8A0A0",
     imageSource: require("../../assets/posts/hk-school.png"),
-    imageOffsetY: -15,
   },
   {
     id: "f11",
-    title: "剑桥 ic offer holder 被 ucl 拒绝",
+    title: "剑桥 IC offer holder 被 UCL 拒绝",
     author: "乘一点耐心一点",
     likes: 131,
     ratio: 1.0,
     tintA: "#C8D8E8", tintB: "#98B0C8",
-    textCard: {
-      bg: "#EEF3FA",
-      textColor: "#1A2A4A",
-      cardText: "剑桥 ic offer holder\n被 ucl 拒绝\n🫠",
-    },
+    imageSource: require("../../assets/posts/ucas-offers.png"),
   },
   {
     id: "f12",
@@ -218,8 +200,16 @@ const STATIC_POSTS: Post[] = [
     likes: 401,
     ratio: 1.45,
     tintA: "#1A1A2E", tintB: "#0D0D1A",
-    imageSource: require("../../assets/posts/goldman-jpmorgan.png"),
-    imageOffsetY: -90,
+    imageSource: require("../../assets/posts/jpmorgan.png"),
+  },
+  {
+    id: "f13",
+    title: "港三本有任何机会进 Goldman Sachs 吗？",
+    author: "港漂打工人",
+    likes: 892,
+    ratio: 1.2,
+    tintA: "#C8D8E8", tintB: "#98B8D8",
+    imageSource: require("../../assets/posts/goldman-question.png"),
   },
 ];
 
