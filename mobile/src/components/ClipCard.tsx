@@ -34,16 +34,23 @@ function relativeTime(iso: string): string {
 /**
  * ClipCard — card component for a single clip in the 2-per-row library grid.
  * Width is controlled by the parent FlatList column layout.
+ * Shows a linked indicator when a sourceVideoUrl is available.
  */
-export default function ClipCard({ title, durationSeconds, createdAt, onPress }: ClipCardProps) {
+export default function ClipCard({ title, durationSeconds, createdAt, sourceVideoUrl, onPress }: ClipCardProps) {
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
       {/* Thumbnail area with play icon and duration badge */}
       <View style={styles.thumbnail}>
-        <Text style={styles.playIcon}>▶</Text>
+        <Text style={[styles.playIcon, sourceVideoUrl ? styles.playIconActive : null]}>▶</Text>
         <View style={styles.durationBadge}>
           <Text style={styles.durationText}>{formatDuration(durationSeconds)}</Text>
         </View>
+        {/* Show a small indicator when a source video URL is linked */}
+        {sourceVideoUrl ? (
+          <View style={styles.linkedBadge}>
+            <Text style={styles.linkedText}>LINKED</Text>
+          </View>
+        ) : null}
       </View>
 
       {/* Clip info */}
@@ -73,6 +80,9 @@ const styles = StyleSheet.create({
     fontSize: 28,
     color: COLORS.textSecondary,
   },
+  playIconActive: {
+    color: COLORS.accent,
+  },
   durationBadge: {
     position: "absolute",
     top: SPACING.xs,
@@ -86,6 +96,21 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 11,
     fontWeight: "600",
+  },
+  linkedBadge: {
+    position: "absolute",
+    bottom: SPACING.xs,
+    left: SPACING.xs,
+    backgroundColor: COLORS.accentDim,
+    borderRadius: RADII.sm,
+    paddingHorizontal: SPACING.xs,
+    paddingVertical: 2,
+  },
+  linkedText: {
+    color: COLORS.accent,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.5,
   },
   info: {
     padding: SPACING.sm,

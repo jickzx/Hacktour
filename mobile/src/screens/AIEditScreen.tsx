@@ -33,9 +33,11 @@ export default function AIEditScreen() {
     setIsGenerating(true);
     setError(null);
     try {
-      await generateEdit(prompt, clips.map((clip) => ({ name: clip.name, duration: Number.parseInt(clip.duration, 10) || 0 })));
-      setShowSavedBanner(true);
-      setTimeout(() => setShowSavedBanner(false), 2500);
+      const result = await generateEdit(prompt, clips.map((clip) => ({ name: clip.name, duration: Number.parseInt(clip.duration, 10) || 0 })));
+      if (result.clipId) {
+        setShowSavedBanner(true);
+        setTimeout(() => setShowSavedBanner(false), 2500);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Generation failed");
     } finally {

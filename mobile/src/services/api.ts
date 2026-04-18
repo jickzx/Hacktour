@@ -23,7 +23,8 @@ export async function generateEdit(
   if (!res.ok || !data.success) {
     throw new Error(data.error || `API error: ${res.status}`);
   }
-  return data.composition;
+  // Return both composition and optional clipId (present only when auto-save succeeded)
+  return { composition: data.composition, clipId: data.clipId as string | undefined };
 }
 
 /** Saves a generated clip to the library */
