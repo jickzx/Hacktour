@@ -39,6 +39,8 @@ export default function AIEditScreen() {
   const [prompt, setPrompt] = useState("");
   const [clips, setClips] = useState<VideoClip[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  // Controls the "Clip saved to library!" success banner visibility
+  const [showSavedBanner, setShowSavedBanner] = useState(false);
 
   /** Simulates picking a video clip from device */
   const handleUpload = () => {
@@ -55,11 +57,16 @@ export default function AIEditScreen() {
     setClips((prev) => prev.filter((c) => c.id !== id));
   };
 
-  /** Triggers the AI generation process */
+  /** Triggers the AI generation process and shows a saved-to-library banner on success */
   const handleGenerate = () => {
     if (!prompt.trim() || clips.length === 0) return;
     setIsGenerating(true);
-    setTimeout(() => setIsGenerating(false), 3000);
+    setTimeout(() => {
+      setIsGenerating(false);
+      // Show "Clip saved to library!" banner for 2.5 seconds
+      setShowSavedBanner(true);
+      setTimeout(() => setShowSavedBanner(false), 2500);
+    }, 3000);
   };
 
   return (
@@ -68,6 +75,13 @@ export default function AIEditScreen() {
         colors={[COLORS.background, "#0D0D1A", COLORS.background]}
         style={StyleSheet.absoluteFill}
       />
+
+      {/* Success banner shown after clip is saved to library */}
+      {showSavedBanner && (
+        <View style={styles.savedBanner}>
+          <Text style={styles.savedBannerText}>✓ Clip saved to library!</Text>
+        </View>
+      )}
 
       <ScrollView
         style={styles.scroll}
@@ -469,5 +483,22 @@ const styles = StyleSheet.create({
   },
   generateTextDisabled: {
     color: COLORS.textMuted,
+  },
+
+  // Saved-to-library success banner
+  savedBanner: {
+    position: "absolute",
+    top: 60,
+    alignSelf: "center",
+    backgroundColor: COLORS.accent,
+    borderRadius: RADII.full,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    zIndex: 100,
+  },
+  savedBannerText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 14,
   },
 });

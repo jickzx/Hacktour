@@ -25,3 +25,40 @@ export async function generateEdit(
   }
   return data.composition;
 }
+
+/** Saves a generated clip to the library */
+export async function saveClip(payload: {
+  prompt: string;
+  composition: object;
+  sourceVideoUrl: string;
+  durationSeconds?: number;
+}) {
+  const res = await fetch(`${API_BASE}/api/clips`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
+  return data.clip;
+}
+
+/** Returns all saved clips from the library, newest first */
+export async function listClips() {
+  const res = await fetch(`${API_BASE}/api/clips`);
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
+  return data.clips;
+}
+
+/** Searches clips by semantic similarity to a text query */
+export async function searchClips(query: string, limit = 10) {
+  const res = await fetch(`${API_BASE}/api/clips/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, limit }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
+  return data.results;
+}
