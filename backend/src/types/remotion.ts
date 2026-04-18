@@ -57,5 +57,6 @@ export interface EditRequest {
 export interface EditResponse {
   success: boolean;
   composition?: RemotionComposition;
+  clipId?: string;
   error?: string;
 }

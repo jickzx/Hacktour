@@ -13,6 +13,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import OpenAI from "openai";
 import editRouter from "./routes/edit";
+import clipsRouter from "./routes/clips";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -37,6 +38,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api", express.json({ limit: "1mb" }), editRouter);
+app.use("/api", express.json({ limit: "1mb" }), clipsRouter);
 
 /**
  * POST /api/transcribe
