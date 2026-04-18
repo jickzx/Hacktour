@@ -7,6 +7,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Alert,
   Dimensions,
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -24,6 +25,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII } from "../constants/theme";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
+import { getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings } from "../services/voiceSettings";
+import { uploadPhoto, editPhoto, identifyOutfit, OutfitItem } from "../services/api";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -40,6 +43,7 @@ interface Comment {
   text: string;
   avatar: string;
   isTranscript?: boolean;
+  link?: string;
 }
 
 
@@ -63,7 +67,18 @@ const PANDA_COMMANDS = [
   { cmd: "hey panda create poll cats or dogs", desc: "Start a chat poll" },
   { cmd: "hey panda close poll", desc: "Dismiss active poll" },
   { cmd: "hey panda go to edit", desc: "Navigate to edit tab" },
+  { cmd: "hey panda take my photo", desc: "Start a guided photo shoot" },
+  { cmd: "hey panda what am I wearing", desc: "Identify outfit + shop links" },
 ];
+
+// Hard cap on pictures per "take photos of me" request
+const MAX_POSES = 10;
+// How long to wait for the streamer to say "yes/ready" before auto-snapping
+const READY_TIMEOUT_MS = 22000;
+// Phrases that count as "take the shot"
+const READY_RE = /\b(yes|yep|yeah|yup|ready|go|shoot|take it|take the (shot|photo|picture)|do it|i'?m ready|ok|okay|sure)\b/i;
+// Phrases that end the photo session early
+const STOP_RE = /\b(stop|cancel|never\s*mind|no more|abort|that'?s enough|enough|done)\b/i;
 
 interface Props {
   onAssistantAction: (action: AssistantAction) => void;
@@ -104,9 +119,31 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const [showCommands, setShowCommands] = useState(false);
   const [copilot, setCopilot] = useState<{ suggestedReply: string; chatSummary: string; modAlert: string | null } | null>(null);
   const recentCommentsRef = useRef<string[]>([]);
+  const [photoSession, setPhotoSession] = useState<{
+    pose: string;
+    index: number;
+    total: number;
+    phase: "pose" | "waiting" | "capturing" | "editing" | "done";
+  } | null>(null);
+  const [flashOpacity] = useState(new Animated.Value(0));
+  const photoSessionRef = useRef(false);
+  const readyResolverRef = useRef<((result: "ready" | "stop" | "timeout") => void) | null>(null);
+  const [outfitScanning, setOutfitScanning] = useState(false);
+  const outfitBusyRef = useRef(false);
   isLiveRef.current = isLive;
   activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
+
+  useEffect(() => {
+    loadVoiceSettings();
+    const unsub = subscribeVoiceSettings(() => {});
+    return unsub;
+  }, []);
+
+  const speak = useCallback((text: string) => {
+    const v = getVoiceSettings();
+    Speech.speak(text, { language: v.language, rate: v.rate, pitch: v.pitch, voice: v.voiceId });
+  }, []);
 
   const granted = cameraPermission?.granted && micPermission?.granted;
 
@@ -267,6 +304,16 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       case "hype":         triggerHype(); break;
       case "shoutout":     if (pendingAction.user) triggerShoutout(pendingAction.user); break;
       case "countdown":    triggerCountdown(pendingAction.seconds ?? 5); break;
+      case "take_photos": {
+        const poses = pendingAction.photos?.poses?.length
+          ? pendingAction.photos.poses
+          : ["big smile", "look over your shoulder", "peace sign", "candid laugh"];
+        if (!photoSessionRef.current) startPhotoSession(poses);
+        break;
+      }
+      case "identify_outfit":
+        scanOutfit();
+        break;
     }
     onPendingActionConsumed();
   }, [pendingAction]); // eslint-disable-line
@@ -296,9 +343,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       console.log(`[Panda] Response: "${data.response}", Action:`, data.action);
 
       // Speak the response
-      if (data.response) {
-        Speech.speak(data.response, { language: "en", rate: 1.1, pitch: 1.0 });
-      }
+      if (data.response) speak(data.response);
 
       // Show as a special comment
       pushComment({
@@ -361,6 +406,20 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       console.log(`[Streamer] ${transcript}`);
       pushComment({ id: `transcript-${Date.now()}`, user: "🎙 you (live)", text: transcript, avatar: "🎤", isTranscript: true });
       transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
+
+      // During a photo session, listen for "ready" / "stop" and swallow everything else
+      if (photoSessionRef.current && readyResolverRef.current) {
+        if (STOP_RE.test(transcript)) {
+          const r = readyResolverRef.current; readyResolverRef.current = null; r("stop");
+          return;
+        }
+        if (READY_RE.test(transcript)) {
+          const r = readyResolverRef.current; readyResolverRef.current = null; r("ready");
+          return;
+        }
+        // Don't trigger assistant / polls while we're shooting — just absorb
+        return;
+      }
 
       if (WAKE_WORDS.test(transcript)) { triggerAssistant(transcript); return; }
 
@@ -441,6 +500,201 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     console.log("[Recording] Stopped.");
   }, []);
 
+  // ── Photo session: Gemini guides streamer through poses ──────────────────────
+
+  const waitForReady = useCallback((timeoutMs: number) =>
+    new Promise<"ready" | "stop" | "timeout">((resolve) => {
+      readyResolverRef.current = resolve;
+      setTimeout(() => {
+        if (readyResolverRef.current === resolve) {
+          readyResolverRef.current = null;
+          resolve("timeout");
+        }
+      }, timeoutMs);
+    }), []);
+
+  const startPhotoSession = useCallback(async (rawPoses: string[]) => {
+    if (photoSessionRef.current) return;
+    const poses = rawPoses.slice(0, MAX_POSES);
+    photoSessionRef.current = true;
+    console.log(`[Photos] Session starting — ${poses.length} poses (max ${MAX_POSES})`);
+
+    // Pause the analyse video loop so we can use takePictureAsync
+    const wasVideoLooping = isVideoLoopRef.current;
+    isVideoLoopRef.current = false;
+    if (isRecordingRef.current && cameraRef.current) {
+      try { cameraRef.current.stopRecording(); } catch {}
+    }
+    // Let camera switch from video→picture mode
+    await new Promise((r) => setTimeout(r, 600));
+
+    const sessionId = `session-${Date.now()}`;
+    const savedOriginals: { id: string; pose: string }[] = [];
+    let stoppedEarly = false;
+
+    for (let i = 0; i < poses.length; i++) {
+      if (!photoSessionRef.current) break;
+      const pose = poses[i];
+
+      // 1. Announce pose + ask for confirmation
+      setPhotoSession({ pose, index: i, total: poses.length, phase: "pose" });
+      const firstLine = i === 0
+        ? `Pose ${i + 1}: ${pose}. Say "ready" when you want me to snap it.`
+        : `Nice! Now: ${pose}. Say "ready" when you're set.`;
+      speak(firstLine);
+      pushComment({
+        id: `pose-${Date.now()}-${i}`,
+        user: "📸 Gemini",
+        text: `Pose ${i + 1}/${poses.length}: ${pose} — say "ready"`,
+        avatar: "✨",
+      });
+
+      // 2. Wait for the streamer to say "yes"/"ready" (or "stop")
+      setPhotoSession({ pose, index: i, total: poses.length, phase: "waiting" });
+      const result = await waitForReady(READY_TIMEOUT_MS);
+      if (!photoSessionRef.current) break;
+      if (result === "stop") {
+        speak("No worries, stopping the shoot.");
+        pushComment({ id: `pose-stop-${Date.now()}`, user: "📸 Gemini", text: "stopped by streamer", avatar: "✨" });
+        stoppedEarly = true;
+        break;
+      }
+      if (result === "timeout") {
+        speak("Alright, taking it anyway — say cheese!");
+      } else {
+        speak("Got it!");
+      }
+
+      // 3. Capture + flash
+      setPhotoSession({ pose, index: i, total: poses.length, phase: "capturing" });
+      await new Promise((r) => setTimeout(r, 550));
+      try {
+        const pic = await cameraRef.current?.takePictureAsync({ quality: 0.85, skipProcessing: true });
+        Animated.sequence([
+          Animated.timing(flashOpacity, { toValue: 0.9, duration: 80, useNativeDriver: true }),
+          Animated.timing(flashOpacity, { toValue: 0, duration: 260, useNativeDriver: true }),
+        ]).start();
+        if (pic?.uri) {
+          const saved = await uploadPhoto({ uri: pic.uri, caption: pose, sessionId });
+          savedOriginals.push({ id: saved.id, pose });
+        }
+      } catch (err) {
+        console.warn("[Photos] Capture error:", err);
+      }
+      // Small breathing room before the next prompt
+      await new Promise((r) => setTimeout(r, 600));
+    }
+
+    // 4. Edit pass (Nano Banana 2) — run them in parallel, keep UI in "editing" phase
+    if (savedOriginals.length > 0 && photoSessionRef.current && !stoppedEarly) {
+      setPhotoSession({
+        pose: "making them cinematic…",
+        index: 0,
+        total: savedOriginals.length,
+        phase: "editing",
+      });
+      speak(`Got ${savedOriginals.length} shots. Making them cinematic, one sec.`);
+      pushComment({
+        id: `edit-start-${Date.now()}`,
+        user: "📸 Gemini",
+        text: `Editing ${savedOriginals.length} photos…`,
+        avatar: "✨",
+      });
+      let completed = 0;
+      await Promise.all(savedOriginals.map((p) =>
+        editPhoto(p.id)
+          .then(() => {
+            completed += 1;
+            setPhotoSession({
+              pose: `edit ${completed}/${savedOriginals.length}`,
+              index: completed,
+              total: savedOriginals.length,
+              phase: "editing",
+            });
+          })
+          .catch((e) => console.warn("[Photos] Edit failed:", e))
+      ));
+    } else if (savedOriginals.length === 0 && !stoppedEarly) {
+      speak("Didn't get any shots that time.");
+    }
+
+    // 5. Wrap up
+    const total = savedOriginals.length;
+    if (total > 0) {
+      speak(`Done! Your ${total} original shots and cinematic edits are in the library.`);
+      pushComment({
+        id: `pose-done-${Date.now()}`,
+        user: "📸 Gemini",
+        text: `Saved ${total} originals + ${total} cinematic edits`,
+        avatar: "✨",
+      });
+    }
+    setPhotoSession(null);
+    photoSessionRef.current = false;
+    readyResolverRef.current = null;
+
+    if (wasVideoLooping && isLiveRef.current && isTranscribingRef.current) {
+      isVideoLoopRef.current = true;
+      videoLoop();
+    }
+  }, [speak, pushComment, flashOpacity, waitForReady]); // eslint-disable-line
+
+  // ── Outfit scan: capture a frame and post shopping links to chat ─────────────
+
+  const scanOutfit = useCallback(async () => {
+    if (outfitBusyRef.current || photoSessionRef.current) return;
+    outfitBusyRef.current = true;
+    setOutfitScanning(true);
+    console.log("[Outfit] Scanning…");
+
+    // Pause video loop so takePictureAsync works
+    const wasVideoLooping = isVideoLoopRef.current;
+    isVideoLoopRef.current = false;
+    if (isRecordingRef.current && cameraRef.current) {
+      try { cameraRef.current.stopRecording(); } catch {}
+    }
+    await new Promise((r) => setTimeout(r, 500));
+
+    try {
+      const pic = await cameraRef.current?.takePictureAsync({ quality: 0.7, skipProcessing: true });
+      if (!pic?.uri) throw new Error("no camera frame");
+
+      const items: OutfitItem[] = await identifyOutfit(pic.uri);
+
+      if (!items.length) {
+        speak("Hmm, I can't see any clothes clearly. Try stepping back?");
+        pushComment({ id: `fit-empty-${Date.now()}`, user: "👗 Gemini", text: "Can't see the fit clearly — try stepping back", avatar: "✨" });
+      } else {
+        const intro = items.length === 1
+          ? `Spotted your ${items[0].label.toLowerCase()}. Dropping a link in chat.`
+          : `Spotted ${items.length} pieces. Dropping links in chat.`;
+        speak(intro);
+        pushComment({ id: `fit-head-${Date.now()}`, user: "👗 Gemini", text: intro, avatar: "✨" });
+        items.forEach((item, i) => {
+          setTimeout(() => {
+            pushComment({
+              id: `fit-${Date.now()}-${i}`,
+              user: "👗 Gemini",
+              text: `${item.label} → tap to shop`,
+              avatar: "🛍",
+              link: item.searchUrl,
+            });
+          }, 350 + i * 450);
+        });
+      }
+    } catch (err) {
+      console.warn("[Outfit] Error:", err);
+      pushComment({ id: `fit-err-${Date.now()}`, user: "👗 Gemini", text: "Outfit scan failed — try again", avatar: "✨" });
+    } finally {
+      setOutfitScanning(false);
+      outfitBusyRef.current = false;
+      if (wasVideoLooping && isLiveRef.current && isTranscribingRef.current) {
+        isVideoLoopRef.current = true;
+        videoLoop();
+      }
+    }
+  }, [speak, pushComment]); // eslint-disable-line
+
   useEffect(() => {
     if (isTranscribing && isLive) {
       isAudioLoopRef.current = true;
@@ -514,7 +768,12 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     >
       {/* ── LAYER 1: Fullscreen camera ── */}
       {granted && !isCamOff ? (
-        <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing={facing} />
+        <CameraView
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          facing={facing}
+          mode={photoSession ? "picture" : "video"}
+        />
       ) : (
         <View style={[StyleSheet.absoluteFill, styles.camFallback]}>
           {!granted ? (
@@ -610,12 +869,41 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
           </View>
         )}
 
-        {/* Zee assistant banner */}
+        {/* Assistant banner */}
         {assistantActive && (
           <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
             <Text style={styles.zeeText}>🐼 Panda is thinking…</Text>
           </View>
         )}
+
+        {/* Outfit scan banner */}
+        {outfitScanning && (
+          <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
+            <Text style={styles.zeeText}>👗 Gemini is scanning your fit…</Text>
+          </View>
+        )}
+
+        {/* Photo session popup */}
+        {photoSession && (
+          <View style={styles.photoBackdrop} pointerEvents="none">
+            <View style={styles.photoCard}>
+              <Text style={styles.photoStep}>
+                {photoSession.phase === "editing"
+                  ? `✨ EDITING ${photoSession.index}/${photoSession.total}`
+                  : `📸 ${Math.min(photoSession.index + 1, photoSession.total)} / ${photoSession.total}`}
+              </Text>
+              <Text style={styles.photoPose}>{photoSession.pose}</Text>
+              <Text style={styles.photoHint}>
+                {photoSession.phase === "pose"     && "listen for the cue…"}
+                {photoSession.phase === "waiting"  && "say “ready” when you’re in position"}
+                {photoSession.phase === "capturing" && "snap!"}
+                {photoSession.phase === "editing"  && "running Nano Banana 2…"}
+                {photoSession.phase === "done"     && "all done"}
+              </Text>
+            </View>
+          </View>
+        )}
+        <Animated.View pointerEvents="none" style={[styles.flash, { opacity: flashOpacity }]} />
 
         {/* Transcribe status banner */}
         {!assistantActive && (isTranscribing || transcribeStatus.length > 0) && (
@@ -701,18 +989,11 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                 style={styles.chatScroll}
                 contentContainerStyle={styles.chatContent}
                 showsVerticalScrollIndicator={false}
-                pointerEvents="none"
+                pointerEvents="box-none"
               >
-                {comments.map((c) => (
-                  <View
-                    key={c.id}
-                    style={[
-                      styles.chatRow,
-                      c.isTranscript && styles.chatRowTranscript,
-                    ]}
-                  >
-                    <Text style={styles.chatAvatar}>{c.avatar}</Text>
-                    <View style={styles.chatBubble}>
+                {comments.map((c) => {
+                  const bubble = (
+                    <View style={[styles.chatBubble, c.link && styles.chatBubbleLink]}>
                       <Text style={[
                         styles.chatUser,
                         c.isTranscript && styles.chatUserTranscript,
@@ -720,10 +1001,27 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                       ]}>
                         {c.user}
                       </Text>
-                      <Text style={styles.chatMsg}>{c.text}</Text>
+                      <Text style={[styles.chatMsg, c.link && styles.chatMsgLink]}>{c.text}</Text>
                     </View>
-                  </View>
-                ))}
+                  );
+                  return (
+                    <View
+                      key={c.id}
+                      style={[
+                        styles.chatRow,
+                        c.isTranscript && styles.chatRowTranscript,
+                      ]}
+                      pointerEvents={c.link ? "box-none" : "none"}
+                    >
+                      <Text style={styles.chatAvatar}>{c.avatar}</Text>
+                      {c.link ? (
+                        <TouchableOpacity activeOpacity={0.8} onPress={() => Linking.openURL(c.link!)}>
+                          {bubble}
+                        </TouchableOpacity>
+                      ) : bubble}
+                    </View>
+                  );
+                })}
               </ScrollView>
 
               <View style={styles.chatInputRow}>
@@ -918,6 +1216,62 @@ const styles = StyleSheet.create({
   commandCmd: { fontSize: 12, fontWeight: "700", color: "#c4b5fd", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
   commandDesc: { fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 2 },
 
+  // Photo session popup
+  photoBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: SPACING.xl,
+  },
+  photoCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "rgba(15,15,25,0.92)",
+    borderRadius: RADII.xl,
+    paddingVertical: SPACING.xl,
+    paddingHorizontal: SPACING.lg,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: COLORS.primaryLight,
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+  },
+  photoStep: {
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 2,
+    color: "#fff",
+    backgroundColor: "rgba(124,58,237,0.85)",
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 5,
+    borderRadius: RADII.full,
+    overflow: "hidden",
+  },
+  photoPose: {
+    fontSize: 28,
+    fontWeight: "900",
+    color: "#fff",
+    textAlign: "center",
+    marginTop: SPACING.md,
+    textShadowColor: "rgba(0,0,0,0.85)",
+    textShadowRadius: 10,
+    textShadowOffset: { width: 0, height: 2 },
+  },
+  photoHint: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.75)",
+    marginTop: SPACING.sm,
+    fontStyle: "italic",
+  },
+  flash: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#fff",
+  },
+
   // Permission
   permCenter: {
     position: "absolute", top: "35%", left: 0, right: 0,
@@ -973,6 +1327,8 @@ const styles = StyleSheet.create({
   chatUserSelf: { color: COLORS.accent },
   chatUserTranscript: { color: "#facc15" },
   chatMsg: { fontSize: 13, color: "rgba(255,255,255,0.92)", lineHeight: 17 },
+  chatBubbleLink: { borderColor: COLORS.accent, backgroundColor: "rgba(6,214,160,0.15)" },
+  chatMsgLink: { color: COLORS.accent, textDecorationLine: "underline", fontWeight: "700" },
   chatInputRow: { flexDirection: "row", gap: SPACING.sm, alignItems: "center" },
   chatInput: {
     flex: 1, height: 40, borderRadius: RADII.full,
