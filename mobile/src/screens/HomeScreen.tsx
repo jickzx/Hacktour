@@ -1,5 +1,4 @@
 /** Home screen — app landing page */
-import { StatusBar } from "expo-status-bar";
 import { StyleSheet, Text, View } from "react-native";
 import { COLORS, SPACING } from "../constants/theme";
 
@@ -8,7 +7,6 @@ export default function HomeScreen() {
     <View style={styles.container}>
       <Text style={styles.title}>Hacktour</Text>
       <Text style={styles.subtitle}>London Global Hacktour 2026</Text>
-      <StatusBar style="auto" />
     </View>
   );
 }

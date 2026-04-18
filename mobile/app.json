@@ -14,7 +14,11 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hacktour.app"
+      "bundleIdentifier": "com.hacktour.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used for live streaming video.",
+        "NSMicrophoneUsageDescription": "Used for live streaming audio and transcription."
+      }
     },
     "android": {
       "adaptiveIcon": {

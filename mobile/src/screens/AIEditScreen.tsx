@@ -10,7 +10,6 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
-  StatusBar,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII } from "../constants/theme";
@@ -65,7 +64,6 @@ export default function AIEditScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" />
       <LinearGradient
         colors={[COLORS.background, "#0D0D1A", COLORS.background]}
         style={StyleSheet.absoluteFill}
@@ -269,7 +267,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: SPACING.lg,
     paddingTop: SPACING.xxl + 16,
-    paddingBottom: SPACING.xxl,
+    paddingBottom: 100, // clear floating navbar
   },
 
   // Header
