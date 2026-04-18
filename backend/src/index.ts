@@ -14,6 +14,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import OpenAI from "openai";
 import editRouter from "./routes/edit";
 import clipsRouter from "./routes/clips";
+import processRouter from "./routes/process";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -23,7 +24,8 @@ const ZAI_MODEL_CHAT = process.env.ZAI_MODEL_CHAT ?? "glm-5-turbo";
 const upload = multer({ dest: "/tmp/hacktour-uploads/" });
 
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "50mb" }));
+app.use("/outputs", express.static("/tmp/hacktour-outputs/"));
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
@@ -31,6 +33,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api", editRouter);
 app.use("/api", clipsRouter);
+app.use("/api", processRouter);
 
 /** Creates a Gemini client only when the key is configured. */
 function getGeminiModel() {

@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,12 +13,13 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Video, ResizeMode } from "expo-av";
 import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { getThumbnailAsync } from "expo-video-thumbnails";
 import { COLORS, RADII, SPACING } from "../constants/theme";
-import { generateEdit } from "../services/api";
+import { processEdit } from "../services/api";
 
 const QUICK_PROMPTS = [
   "Add subtitles",
@@ -34,6 +36,7 @@ interface VideoClip {
   duration: string;
   durationSecs: number;
   thumbnail: string | null;
+  uri: string;
 }
 
 interface CompositionResult {
@@ -52,6 +55,7 @@ export default function AIEditScreen() {
   const [clips, setClips] = useState<VideoClip[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [composition, setComposition] = useState<CompositionResult | null>(null);
+  const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSavedBanner, setShowSavedBanner] = useState(false);
 
@@ -90,6 +94,7 @@ export default function AIEditScreen() {
         duration: formatDuration(secs),
         durationSecs: secs,
         thumbnail,
+        uri: asset.uri,
       });
     }
 
@@ -115,12 +120,14 @@ export default function AIEditScreen() {
         clips.map(async (clip) => ({
           name: clip.name,
           duration: clip.durationSecs,
+          uri: clip.uri,
           thumbnail: await readThumbnailDataUrl(clip.thumbnail),
         }))
       );
 
-      const result = await generateEdit(prompt, clipPayload);
-      setComposition(result.composition);
+      const result = await processEdit(prompt, clipPayload);
+      setComposition(result.composition as CompositionResult);
+      setPreviewUri(result.videoUrl);
       if (result.clipId) {
         setShowSavedBanner(true);
         setTimeout(() => setShowSavedBanner(false), 2500);
@@ -166,7 +173,7 @@ export default function AIEditScreen() {
         />
         {isGenerating && <LoadingIndicator />}
         {error && <ErrorBanner message={error} />}
-        {composition && <CompositionCard composition={composition} />}
+        {composition && <CompositionCard composition={composition} previewUri={previewUri} />}
       </ScrollView>
     </View>
   );
@@ -223,7 +230,11 @@ function ClipList({ clips, onRemove }: { clips: VideoClip[]; onRemove: (id: stri
         {clips.map((clip) => (
           <View key={clip.id} style={styles.clipCard}>
             <View style={styles.clipThumb}>
-              <Text style={styles.clipThumbIcon}>▶</Text>
+              {clip.thumbnail ? (
+                <Image source={{ uri: clip.thumbnail }} style={styles.clipThumbImg} resizeMode="cover" />
+              ) : (
+                <Text style={styles.clipThumbIcon}>▶</Text>
+              )}
             </View>
             <Text numberOfLines={1} style={styles.clipName}>{clip.name}</Text>
             <Text style={styles.clipDuration}>{clip.duration}</Text>
@@ -298,7 +309,7 @@ function LoadingIndicator() {
   return (
     <View style={styles.loadingWrap}>
       <ActivityIndicator size="large" color={COLORS.primaryLight} />
-      <Text style={styles.loadingText}>Analyzing clips and generating edit...</Text>
+      <Text style={styles.loadingText}>Processing video — this may take a moment...</Text>
     </View>
   );
 }
@@ -311,11 +322,20 @@ function ErrorBanner({ message }: { message: string }) {
   );
 }
 
-function CompositionCard({ composition }: { composition: CompositionResult }) {
+function CompositionCard({ composition, previewUri }: { composition: CompositionResult; previewUri: string | null }) {
   const totalSecs = Math.round(composition.totalDurationFrames / composition.fps);
 
   return (
     <View style={styles.resultWrap}>
+      {previewUri && (
+        <Video
+          source={{ uri: previewUri }}
+          style={styles.videoPreview}
+          resizeMode={ResizeMode.CONTAIN}
+          useNativeControls
+          shouldPlay={false}
+        />
+      )}
       <LinearGradient colors={[COLORS.surface, COLORS.surfaceLight]} style={styles.resultCard}>
         <Text style={styles.resultTitle}>Edit Generated</Text>
         <Row label="Resolution" value={`${composition.width}×${composition.height}`} />
@@ -373,7 +393,8 @@ const styles = StyleSheet.create({
   clipBadgeText: { fontSize: 12, fontWeight: "600", color: COLORS.accent },
   clipListWrap: { marginBottom: SPACING.lg },
   clipCard: { width: 110, backgroundColor: COLORS.surface, borderRadius: RADII.md, padding: SPACING.sm, marginRight: SPACING.sm, alignItems: "center", borderWidth: 1, borderColor: COLORS.surfaceBorder },
-  clipThumb: { width: "100%", height: 60, backgroundColor: COLORS.surfaceLight, borderRadius: RADII.sm, alignItems: "center", justifyContent: "center", marginBottom: SPACING.sm },
+  clipThumb: { width: "100%", height: 60, backgroundColor: COLORS.surfaceLight, borderRadius: RADII.sm, alignItems: "center", justifyContent: "center", marginBottom: SPACING.sm, overflow: "hidden" },
+  clipThumbImg: { width: "100%", height: "100%", borderRadius: RADII.sm },
   clipThumbIcon: { fontSize: 18, color: COLORS.primaryLight },
   clipName: { fontSize: 11, color: COLORS.text, fontWeight: "500", width: "100%" },
   clipDuration: { fontSize: 10, color: COLORS.textMuted, marginTop: 2 },
@@ -395,6 +416,7 @@ const styles = StyleSheet.create({
   loadingText: { color: COLORS.textSecondary, marginTop: SPACING.md, fontSize: 14 },
   errorWrap: { backgroundColor: "#EF444422", borderRadius: RADII.md, padding: SPACING.md, marginTop: SPACING.lg, borderWidth: 1, borderColor: "#EF444444" },
   errorText: { color: COLORS.error, fontSize: 14 },
+  videoPreview: { width: "100%", height: 220, borderRadius: RADII.lg, backgroundColor: "#000", marginBottom: SPACING.md },
   resultWrap: { marginTop: SPACING.xl },
   resultCard: { borderRadius: RADII.lg, padding: SPACING.lg, borderWidth: 1, borderColor: COLORS.primaryDark },
   resultTitle: { fontSize: 18, fontWeight: "700", color: COLORS.accent, marginBottom: SPACING.md },
