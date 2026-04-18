@@ -7,10 +7,29 @@ const API_BASE =
     ? "http://localhost:3001"
     : process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
+/**
+ * Parse response as JSON, throwing a friendly error if the server returns
+ * HTML (e.g. an expired ngrok tunnel or a 404 page) instead of JSON.
+ */
+async function safeJson(res: Response) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // HTML responses start with '<' — give a clear message rather than a raw parse error
+    const preview = text.slice(0, 60).trim();
+    throw new Error(
+      preview.startsWith("<")
+        ? "Backend unreachable — check your ngrok tunnel is running"
+        : `Bad response from server: ${preview}`
+    );
+  }
+}
+
 export async function fetchHealth() {
   const res = await fetch(`${API_BASE}/api/health`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
+  return safeJson(res);
 }
 
 /** Sends clips with thumbnails and prompt to the AI edit endpoint */
@@ -24,11 +43,10 @@ export async function generateEdit(
     body: JSON.stringify({ prompt, clips }),
   });
 
-  const data = await res.json();
+  const data = await safeJson(res);
   if (!res.ok || !data.success) {
     throw new Error(data.error || `API error: ${res.status}`);
   }
-  // Return both composition and optional clipId (present only when auto-save succeeded)
   return { composition: data.composition, clipId: data.clipId as string | undefined };
 }
 
@@ -50,7 +68,7 @@ export async function processEdit(
   }
 
   const res = await fetch(`${API_BASE}/api/process`, { method: "POST", body: form });
-  const data = await res.json();
+  const data = await safeJson(res);
   if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
   return { videoUrl: `${API_BASE}${data.videoUrl}`, composition: data.composition, clipId: data.clipId };
 }
@@ -67,7 +85,7 @@ export async function saveClip(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
+  const data = await safeJson(res);
   if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
   return data.clip;
 }
@@ -75,7 +93,7 @@ export async function saveClip(payload: {
 /** Returns all saved clips from the library, newest first */
 export async function listClips() {
   const res = await fetch(`${API_BASE}/api/clips`);
-  const data = await res.json();
+  const data = await safeJson(res);
   if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
   return data.clips;
 }
@@ -87,7 +105,7 @@ export async function searchClips(query: string, limit = 10) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, limit }),
   });
-  const data = await res.json();
+  const data = await safeJson(res);
   if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
   return data.results;
 }
@@ -99,7 +117,7 @@ export async function fetchFeed(): Promise<{
   isVideo?: boolean; isLive?: boolean; tag?: string;
 }[]> {
   const res = await fetch(`${API_BASE}/api/feed`);
-  const data = await res.json();
+  const data = await safeJson(res);
   if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
   return data.posts;
 }

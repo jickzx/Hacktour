@@ -1,12 +1,14 @@
 /**
  * HomeScreen — XHS dark explore feed.
  * Top: real AI-edited clips from the user (via /api/clips).
- * Body: AI-generated trending Chinese social posts (via /api/feed, Gemini-powered).
- * Falls back to static baseline cards if backend is unreachable.
+ * Body: hardcoded authentic XHS posts — screenshot images where clean,
+ * styled gradient cards for multi-post screenshots that don't crop well.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
+  ImageSourcePropType,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -15,12 +17,12 @@ import {
   View,
 } from "react-native";
 import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS } from "../constants/theme";
-import { listClips, fetchFeed } from "../services/api";
+import { listClips } from "../services/api";
 
 const TOP_TABS = ["Following", "Explore", "Nearby"] as const;
 type TopTab = (typeof TOP_TABS)[number];
 
-const CATEGORIES = ["For You", "Video", "Live", "Fashion", "Food", "Travel", "Beauty"] as const;
+const CATEGORIES = ["For You", "Video", "Live", "Career", "Cars"] as const;
 
 interface Post {
   id: string;
@@ -32,11 +34,30 @@ interface Post {
   tintB: string;
   isLive?: boolean;
   isVideo?: boolean;
-  tag?: string;
   isClip?: boolean;
+  imageSource?: ImageSourcePropType;
+  imageOffsetY?: number;
+  textCard?: {
+    bg: string;
+    textColor: string;
+    cardText: string;
+    secondaryText?: string;
+  };
+  gradientCard?: {
+    topColor: string;
+    bottomColor: string;
+    label?: string;
+    mainText: string;
+    textColor?: string;
+  };
 }
 
-interface ApiClip { id: string; prompt: string; durationSeconds?: number; createdAt: string }
+interface ApiClip {
+  id: string;
+  prompt: string;
+  durationSeconds?: number;
+  createdAt: string;
+}
 
 const PALETTE: [string, string][] = [
   ["#B8C9D9", "#6B8BAA"], ["#E8D4B8", "#C89968"], ["#3A3028", "#1A1410"],
@@ -45,16 +66,161 @@ const PALETTE: [string, string][] = [
   ["#E1BEE7", "#7B1FA2"], ["#FFF9C4", "#F9A825"], ["#B2EBF2", "#0097A7"],
 ];
 
-/** Static fallback in case backend is offline */
-const FALLBACK_POSTS: Post[] = [
-  { id: "f1", title: "今日份穿搭 | 多巴胺色系 🌈✨", author: "穿搭博主_Lily", likes: 12840, ratio: 1.35, tintA: "#E1BEE7", tintB: "#7B1FA2", isVideo: true, tag: "穿搭" },
-  { id: "f2", title: "伦敦留学生的一天 ☕ 学习vlog", author: "留英日记_Momo", likes: 3201, ratio: 0.95, tintA: "#B8C9D9", tintB: "#6B8BAA", tag: "留学" },
-  { id: "f3", title: "好物种草！这个遮瑕真的绝了姐妹们冲🔥", author: "美妆小仙女99", likes: 8490, ratio: 1.45, tintA: "#FFB8C8", tintB: "#FF2442", tag: "美妆" },
-  { id: "f4", title: "大厂offer来了！复盘我的春招经历", author: "互联网打工人", likes: 24356, ratio: 1.1, tintA: "#F0E8DC", tintB: "#D4C4A8", tag: "职场" },
-  { id: "f5", title: "伦敦探店 | 这家奶茶比国内还好喝？！", author: "吃货在英国", likes: 6712, ratio: 1.2, tintA: "#8B5A3C", tintB: "#3D2617", isVideo: true, tag: "美食" },
-  { id: "f6", title: "AI帮我剪了条片子 直接爆了 🤯", author: "科技宅Vince", likes: 41200, ratio: 1.05, tintA: "#2E2E3A", tintB: "#0F0F14", isLive: true, tag: "科技" },
-  { id: "f7", title: "2026最火梗图合集😂 笑死我了", author: "表情包收集员", likes: 19083, ratio: 1.3, tintA: "#FFF9C4", tintB: "#F9A825", isVideo: true, tag: "梗图" },
-  { id: "f8", title: "显瘦穿搭 | 微胖女生亲测有效 💕", author: "小红薯_XiaoMei", likes: 7540, ratio: 0.98, tintA: "#C8E6C9", tintB: "#388E3C", tag: "穿搭" },
+const STATIC_POSTS: Post[] = [
+  {
+    id: "f1",
+    title: "🇬🇧 伦敦😌市中心 £19.9 无限日料自助",
+    author: "伦敦食记与小动物",
+    likes: 401,
+    ratio: 1.4,
+    tintA: "#5C3D2E", tintB: "#3A1F0F",
+    isVideo: true,
+    gradientCard: {
+      topColor: "#1A0F08",
+      bottomColor: "#4A2010",
+      label: "🇬🇧 伦敦探店",
+      mainText: "£19.9\n随便吃\n日料自助 🍣",
+      textColor: "#FFD580",
+    },
+  },
+  {
+    id: "f2",
+    title: "我先投了，4月才是真正的「捡漏月」",
+    author: "是个上岸栗子",
+    likes: 21,
+    ratio: 1.05,
+    tintA: "#B8D4E8", tintB: "#A0C4E0",
+    textCard: {
+      bg: "#EDF6FF",
+      textColor: "#1A5F8A",
+      secondaryText: "4月可是 🇭🇰",
+      cardText: "SummerIntern\n捡漏黄金期!",
+    },
+  },
+  {
+    id: "f3",
+    title: "claude code 的团队模式真的赶快用！！！",
+    author: "jesse-菲美信息",
+    likes: 1276,
+    ratio: 1.3,
+    tintA: "#1A1A2E", tintB: "#0D0D1A",
+    imageSource: require("../../assets/posts/claude-code.png"),
+    imageOffsetY: -30,
+  },
+  {
+    id: "f4",
+    title: "一眼认出🇭🇰香港男生❗揭秘3个超明显特征！",
+    author: "钓仔沪上飘",
+    likes: 1837,
+    ratio: 1.45,
+    tintA: "#C84820", tintB: "#801A00",
+    isVideo: true,
+    gradientCard: {
+      topColor: "#0D0500",
+      bottomColor: "#7A2008",
+      label: "🇭🇰 香港人",
+      mainText: "香港男生\n为什么\n一眼就认出？",
+      textColor: "#FFE080",
+    },
+  },
+  {
+    id: "f5",
+    title: "rag 已死",
+    author: "李洛克",
+    likes: 1489,
+    ratio: 1.05,
+    tintA: "#F8D0D0", tintB: "#E8A0A0",
+    textCard: {
+      bg: "#FFF0F0",
+      textColor: "#8B2020",
+      secondaryText: "MAR.31",
+      cardText: "我宣布，\nRAG 已死\n😤",
+    },
+  },
+  {
+    id: "f6",
+    title: "Title 越短，越大佬",
+    author: "3 Sigma IBD...",
+    likes: 2556,
+    ratio: 1.25,
+    tintA: "#1A2A3E", tintB: "#0A1828",
+    gradientCard: {
+      topColor: "#050D18",
+      bottomColor: "#1A3058",
+      label: "职场 · 大佬学",
+      mainText: "Title 越短\n越大佬",
+      textColor: "#A8C8FF",
+    },
+  },
+  {
+    id: "f7",
+    title: "手抓拉塞尔F1真车 | 帝国理工造赛车年 vlog",
+    author: "艾仔壳",
+    likes: 4893,
+    ratio: 1.35,
+    tintA: "#1A3050", tintB: "#0A1828",
+    isVideo: true,
+    imageSource: require("../../assets/posts/imperial-f1.png"),
+    imageOffsetY: -25,
+  },
+  {
+    id: "f8",
+    title: "上海 00后 UCL 海归情侣 今天身价多少钱",
+    author: "拜托了姐妹",
+    likes: 1492,
+    ratio: 1.55,
+    tintA: "#E8D4C0", tintB: "#C4A882",
+    isVideo: true,
+    imageSource: require("../../assets/posts/ucl-couple.png"),
+    imageOffsetY: -20,
+  },
+  {
+    id: "f9",
+    title: "投行",
+    author: "又逢春",
+    likes: 136,
+    ratio: 1.15,
+    tintA: "#B0C8E8", tintB: "#8AAAC8",
+    textCard: {
+      bg: "#F0F5FF",
+      textColor: "#1A3060",
+      secondaryText: "投行",
+      cardText: "港三本有任何\n机会进hk\nGoldman Sachs\n吗？🙇",
+    },
+  },
+  {
+    id: "f10",
+    title: "求求了😭香港中学真的不是你想进就能进！",
+    author: "欣益妈国际教育说",
+    likes: 236,
+    ratio: 1.65,
+    tintA: "#E8D4D4", tintB: "#C8A0A0",
+    imageSource: require("../../assets/posts/hk-school.png"),
+    imageOffsetY: -15,
+  },
+  {
+    id: "f11",
+    title: "剑桥 ic offer holder 被 ucl 拒绝",
+    author: "乘一点耐心一点",
+    likes: 131,
+    ratio: 1.0,
+    tintA: "#C8D8E8", tintB: "#98B0C8",
+    textCard: {
+      bg: "#EEF3FA",
+      textColor: "#1A2A4A",
+      cardText: "剑桥 ic offer holder\n被 ucl 拒绝\n🫠",
+    },
+  },
+  {
+    id: "f12",
+    title: "港大生在 J.P. Morgan 被狠狠上了一课🥲",
+    author: "11是伊伊",
+    likes: 401,
+    ratio: 1.45,
+    tintA: "#1A1A2E", tintB: "#0D0D1A",
+    imageSource: require("../../assets/posts/goldman-jpmorgan.png"),
+    imageOffsetY: -90,
+  },
 ];
 
 function clipToPost(clip: ApiClip): Post {
@@ -69,7 +235,6 @@ function clipToPost(clip: ApiClip): Post {
     tintB,
     isVideo: true,
     isClip: true,
-    tag: "AI",
   };
 }
 
@@ -77,17 +242,15 @@ export default function HomeScreen() {
   const [topTab, setTopTab] = useState<TopTab>("Explore");
   const [category, setCategory] = useState<string>("For You");
   const [clipPosts, setClipPosts] = useState<Post[]>([]);
-  const [feedPosts, setFeedPosts] = useState<Post[]>(FALLBACK_POSTS);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadAll = useCallback(async () => {
     try {
-      const [clips, feed] = await Promise.allSettled([listClips(), fetchFeed()]);
-      if (clips.status === "fulfilled") setClipPosts(clips.value.map(clipToPost));
-      if (feed.status === "fulfilled") setFeedPosts(feed.value as Post[]);
+      const clips = await listClips();
+      setClipPosts(clips.map(clipToPost));
     } catch {
-      // silently fall back
+      // silently ignore
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -98,7 +261,7 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(() => { setRefreshing(true); loadAll(); }, [loadAll]);
 
-  const allPosts = useMemo(() => [...clipPosts, ...feedPosts], [clipPosts, feedPosts]);
+  const allPosts = useMemo(() => [...clipPosts, ...STATIC_POSTS], [clipPosts]);
 
   const { leftCol, rightCol } = useMemo(() => {
     const left: Post[] = [], right: Post[] = [];
@@ -112,7 +275,6 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.root}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.iconBtn}>
           <Text style={styles.menuIcon}>☰</Text>
@@ -130,7 +292,6 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Category chips */}
       <View style={styles.categoryWrap}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryContent}>
           {CATEGORIES.map((c) => (
@@ -144,7 +305,6 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Clip banner */}
       {clipPosts.length > 0 && (
         <View style={styles.clipBanner}>
           <View style={styles.clipBannerDot} />
@@ -154,21 +314,13 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* AI feed source indicator */}
-      {!loading && feedPosts !== FALLBACK_POSTS && (
-        <View style={styles.aiTag}>
-          <Text style={styles.aiTagText}>✦ AI · Trending now in 中国</Text>
-        </View>
-      )}
-
       {loading && (
         <View style={styles.loadingRow}>
           <ActivityIndicator size="small" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading trending content…</Text>
+          <Text style={styles.loadingText}>Loading…</Text>
         </View>
       )}
 
-      {/* Masonry feed */}
       <ScrollView
         style={styles.feedScroll}
         contentContainerStyle={styles.feedContent}
@@ -190,35 +342,69 @@ function PostCard({ post }: { post: Post }) {
 
   return (
     <TouchableOpacity style={styles.card} activeOpacity={0.85}>
-      <View style={[styles.thumb, { aspectRatio: 1 / post.ratio, backgroundColor: post.tintB }]}>
-        <View style={[styles.thumbTint, { backgroundColor: post.tintA, opacity: 0.35 }]} />
+      <View style={[styles.thumbWrap, { aspectRatio: 1 / post.ratio }]}>
 
-        {/* Tag pill top-left */}
-        {post.tag && !post.isClip && (
-          <View style={styles.tagPill}>
-            <Text style={styles.tagText}>{post.tag}</Text>
+        {post.imageSource ? (
+          <Image
+            source={post.imageSource}
+            style={[
+              StyleSheet.absoluteFill,
+              post.imageOffsetY ? { transform: [{ translateY: post.imageOffsetY }] } : undefined,
+            ]}
+            resizeMode="cover"
+          />
+        ) : post.gradientCard ? (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: post.gradientCard.topColor }]}>
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: post.gradientCard.bottomColor, opacity: 0.6 }]} />
+            <View style={styles.gradientCardInner}>
+              {post.gradientCard.label && (
+                <Text style={[styles.gradientLabel, { color: post.gradientCard.textColor ?? "#FFF" }]}>
+                  {post.gradientCard.label}
+                </Text>
+              )}
+              <Text style={[styles.gradientMain, { color: post.gradientCard.textColor ?? "#FFF" }]}>
+                {post.gradientCard.mainText}
+              </Text>
+            </View>
+          </View>
+        ) : post.textCard ? (
+          <View style={[StyleSheet.absoluteFill, styles.textCardWrap, { backgroundColor: post.textCard.bg }]}>
+            {post.textCard.secondaryText && (
+              <Text style={[styles.textCardSecondary, { color: post.textCard.textColor }]}>
+                {post.textCard.secondaryText}
+              </Text>
+            )}
+            <Text style={[styles.textCardMain, { color: post.textCard.textColor }]}>
+              {post.textCard.cardText}
+            </Text>
+          </View>
+        ) : (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: post.tintB }]}>
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: post.tintA, opacity: 0.35 }]} />
           </View>
         )}
+
         {post.isClip && (
-          <View style={[styles.tagPill, styles.tagPillClip]}>
-            <Text style={styles.tagText}>YOUR CLIP</Text>
+          <View style={[styles.badge, styles.badgeClip]}>
+            <Text style={styles.badgeText}>YOUR CLIP</Text>
           </View>
         )}
-
         {post.isLive && (
-          <View style={styles.liveBadge}>
+          <View style={[styles.badge, styles.badgeLive]}>
             <View style={styles.liveDot} />
-            <Text style={styles.liveBadgeText}>LIVE</Text>
+            <Text style={styles.badgeText}>LIVE</Text>
           </View>
         )}
         {post.isVideo && (
-          <View style={styles.playBadge}>
+          <View style={styles.playBtn}>
             <Text style={styles.playIcon}>▶</Text>
           </View>
         )}
       </View>
 
-      <Text style={styles.cardTitle} numberOfLines={2}>{post.title}</Text>
+      {(!post.imageSource || post.isClip) && (
+        <Text style={styles.cardTitle} numberOfLines={2}>{post.title}</Text>
+      )}
       <View style={styles.cardMeta}>
         <View style={[styles.avatar, post.isClip && styles.avatarClip]} />
         <Text style={styles.cardAuthor} numberOfLines={1}>{post.author}</Text>
@@ -245,7 +431,7 @@ const styles = StyleSheet.create({
   tabText: { fontSize: FONT_SIZES.lg, color: COLORS.textMuted, fontWeight: WEIGHTS.semibold },
   tabTextActive: { color: COLORS.text, fontWeight: WEIGHTS.bold },
   tabUnderline: { marginTop: 4, width: 20, height: 2, borderRadius: 1, backgroundColor: COLORS.primary },
-  searchIcon: { fontSize: 22, color: COLORS.text, fontWeight: WEIGHTS.regular },
+  searchIcon: { fontSize: 22, color: COLORS.text },
 
   categoryWrap: {
     flexDirection: "row", alignItems: "center",
@@ -268,12 +454,6 @@ const styles = StyleSheet.create({
   clipBannerDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.primary },
   clipBannerText: { fontSize: FONT_SIZES.sm, color: COLORS.primary, fontWeight: WEIGHTS.medium },
 
-  aiTag: {
-    paddingHorizontal: SPACING.lg, paddingVertical: 5,
-    backgroundColor: "rgba(255,255,255,0.03)",
-  },
-  aiTagText: { fontSize: 10, color: COLORS.textMuted, fontWeight: WEIGHTS.medium, letterSpacing: 0.4 },
-
   loadingRow: {
     flexDirection: "row", alignItems: "center", gap: SPACING.sm,
     paddingHorizontal: SPACING.lg, paddingVertical: SPACING.sm,
@@ -286,32 +466,54 @@ const styles = StyleSheet.create({
   col: { flex: 1, gap: SPACING.md },
 
   card: { borderRadius: RADII.md, overflow: "hidden" },
-  thumb: {
-    width: "100%", borderRadius: RADII.md, overflow: "hidden",
-    justifyContent: "flex-end", padding: SPACING.sm,
-  },
-  thumbTint: { ...StyleSheet.absoluteFillObject },
+  thumbWrap: { width: "100%", borderRadius: RADII.md, overflow: "hidden" },
 
-  tagPill: {
+  gradientCardInner: {
+    ...StyleSheet.absoluteFillObject,
+    padding: SPACING.md,
+    justifyContent: "flex-end",
+    paddingBottom: SPACING.lg,
+  },
+  gradientLabel: {
+    fontSize: 10,
+    fontWeight: WEIGHTS.semibold,
+    letterSpacing: 0.6,
+    opacity: 0.8,
+    marginBottom: SPACING.xs,
+  },
+  gradientMain: {
+    fontSize: 18,
+    fontWeight: WEIGHTS.bold,
+    lineHeight: 26,
+  },
+
+  textCardWrap: { padding: SPACING.md, justifyContent: "center" },
+  textCardSecondary: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: WEIGHTS.medium,
+    opacity: 0.55,
+    marginBottom: SPACING.xs,
+    letterSpacing: 0.4,
+  },
+  textCardMain: {
+    fontSize: 14,
+    fontWeight: WEIGHTS.bold,
+    lineHeight: 21,
+  },
+
+  badge: {
     position: "absolute", top: 8, left: 8,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    paddingHorizontal: 7, paddingVertical: 3,
-    borderRadius: RADII.full,
-  },
-  tagPillClip: { backgroundColor: COLORS.primary },
-  tagText: { fontSize: 9, color: "#FFFFFF", fontWeight: WEIGHTS.bold, letterSpacing: 0.6 },
-
-  liveBadge: {
-    position: "absolute", top: 8, right: 8,
     flexDirection: "row", alignItems: "center",
-    backgroundColor: COLORS.primary,
     paddingHorizontal: 7, paddingVertical: 3,
     borderRadius: RADII.full, gap: 4,
+    backgroundColor: "rgba(0,0,0,0.55)",
   },
+  badgeClip: { backgroundColor: COLORS.primary },
+  badgeLive: { left: "auto" as any, right: 8, backgroundColor: COLORS.primary },
+  badgeText: { fontSize: 9, color: "#FFFFFF", fontWeight: WEIGHTS.bold, letterSpacing: 0.6 },
   liveDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: "#FFFFFF" },
-  liveBadgeText: { fontSize: 9, color: "#FFFFFF", fontWeight: WEIGHTS.bold, letterSpacing: 0.8 },
 
-  playBadge: {
+  playBtn: {
     position: "absolute", bottom: SPACING.sm, right: SPACING.sm,
     width: 22, height: 22, borderRadius: 11,
     backgroundColor: "rgba(0,0,0,0.55)",
