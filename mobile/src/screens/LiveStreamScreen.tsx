@@ -18,17 +18,21 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
+import { AudioModule, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
 import * as Speech from "expo-speech";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII } from "../constants/theme";
 import type { AssistantAction } from "../../App";
+import PollOverlay from "../components/PollOverlay";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://100.80.219.114:3001";
 
-// Record in ~5s chunks for rolling transcription
-const CHUNK_MS = 5000;
+// Audio-only transcription chunks (fast)
+const AUDIO_CHUNK_MS = 3000;
+// Video chunks for AI comments (slower, visual context)
+const VIDEO_CHUNK_MS = 5000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,7 +50,8 @@ interface Comment {
 const { height: SCREEN_H } = Dimensions.get("window");
 
 // Wake word variants — "zee", "z", "zy", "zed", "hey z", "hey zee"
-const WAKE_WORDS = /\b(zee|zed|zy|hey\s*z(?:ee|ed)?)\b/i;
+// Match "zee", "z", "yo z", "hey z", "zed", "zy", standalone or at start of command
+const WAKE_WORDS = /(?:^|\s)(yo\s+z(?:ee|ed|y)?|hey\s+z(?:ee|ed|y)?|zee|zed|zy|\bz\b)(?:\s|,|$)/i;
 
 interface Props {
   onAssistantAction: (action: AssistantAction) => void;
@@ -73,11 +78,18 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const cameraRef = useRef<CameraView>(null);
   const isRecordingRef = useRef(false);
+  const isVideoLoopRef = useRef(false);
+  const isAudioLoopRef = useRef(false);
+  const audioRecordingRef = useRef<InstanceType<typeof AudioModule.AudioRecorder> | null>(null);
   const isLiveRef = useRef(false);
   const isTranscribingRef = useRef(false);
   const transcriptContextRef = useRef<string[]>([]);
   const [assistantActive, setAssistantActive] = useState(false);
+  const [activePoll, setActivePoll] = useState<{ question: string; options: string[] } | null>(null);
+  const activePollRef = useRef(activePoll);
+  const [latestAiComment, setLatestAiComment] = useState<string | undefined>();
   isLiveRef.current = isLive;
+  activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
 
   const granted = cameraPermission?.granted && micPermission?.granted;
@@ -125,11 +137,37 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     // Drip them in one at a time with random delays so it feels live
     newComments.forEach((c, i) => {
       setTimeout(() => {
-        pushComment({ id: `ai-${Date.now()}-${i}`, ...c });
+        pushComment({ id: `ai-${Date.now()}-${i}-${Math.random().toString(36).slice(2)}`, ...c });
+        setLatestAiComment(c.text);
       }, i * (400 + Math.random() * 300));
     });
   }, [pushComment]);
 
+
+  // ── Fake viewer votes while poll is active ───────────────────────────────────
+
+  useEffect(() => {
+    if (!activePoll) return;
+    const FAKE_USERS = ["xX_fan99","stream_kid","lurker42","goated_viewer","hype_man7","w_commenter","chat_rat","vibes_only","lowkey_real","no_cap_bro"];
+    const VOTE_TEMPLATES = (opt: string) => [
+      opt, `${opt}!!`, `${opt} for sure`, `${opt} easy`, `${opt} 🔥`, `definitely ${opt}`, `gotta be ${opt}`, `${opt} no cap`, `${opt} W`
+    ];
+    const interval = setInterval(() => {
+      // 2-4 votes per tick
+      const count = 2 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < count; i++) {
+        const opt = activePoll.options[Math.random() < 0.55 ? 0 : 1]; // slight bias to first
+        const templates = VOTE_TEMPLATES(opt);
+        const text = templates[Math.floor(Math.random() * templates.length)];
+        const user = FAKE_USERS[Math.floor(Math.random() * FAKE_USERS.length)];
+        setTimeout(() => {
+          pushComment({ id: `vote-${Date.now()}-${Math.random()}`, user, text, avatar: "👤" });
+          setLatestAiComment(text);
+        }, i * 300);
+      }
+    }, 1800);
+    return () => clearInterval(interval);
+  }, [activePoll, pushComment]);
 
   // ── Assistant: handle pendingAction from App.tsx ─────────────────────────────
 
@@ -141,6 +179,9 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       case "mute":         setIsMuted(true); break;
       case "unmute":       setIsMuted(false); break;
       case "flip_camera":  setFacing(f => f === "front" ? "back" : "front"); break;
+      case "create_poll":
+        if (pendingAction.poll) setActivePoll(pendingAction.poll);
+        break;
     }
     onPendingActionConsumed();
   }, [pendingAction]); // eslint-disable-line
@@ -192,83 +233,116 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     }
   }, [pushComment, onAssistantAction]);
 
-  // ── Video+audio chunk → Gemini transcribe + react ────────────────────────────
+  // ── Poll detection helper (pure, no hooks) ───────────────────────────────────
 
-  const processChunk = useCallback(async (uri: string) => {
+  const detectPoll = (transcript: string): { question: string; options: [string, string] } | null => {
+    const orMatch = transcript.match(/\b([\w\s']+?)\s+or\s+([\w\s']+?)(?:\?|,|\.|$)/i);
+    if (!orMatch) return null;
+    const clean = (s: string) => s
+      .replace(/^(who('?s)?\s+(gonna|going to)\s+win[,\s]*)/i, "")
+      .replace(/\b(tonight|today|right now|chat|guys)\b.*$/i, "")
+      .replace(/^(the\s+streamer\s+(asks?|says)[,\s"]*)/i, "")
+      .trim();
+    const a = clean(orMatch[1]);
+    const b = clean(orMatch[2]);
+    if (a.split(" ").length <= 4 && b.split(" ").length <= 4 && a.length > 1 && b.length > 1) {
+      const qMatch = transcript.match(/"([^"]+)"/);
+      const question = qMatch ? qMatch[1] : `${a} or ${b}?`;
+      return { question, options: [a, b] };
+    }
+    return null;
+  };
+
+  // ── Fast audio-only transcription loop ───────────────────────────────────────
+
+  const processAudioChunk = useCallback(async (uri: string) => {
     try {
-      setTranscribeStatus("uploading…");
-      console.log("[Chunk] Uploading:", uri, "to", BACKEND_URL);
-
-      // Upload as multipart form — avoids huge JSON base64 payload
       const form = new FormData();
-      form.append("video", { uri, name: "chunk.mov", type: "video/quicktime" } as any);
-      // Pass rolling context as JSON string
-      form.append("context", JSON.stringify(transcriptContextRef.current.slice(-4)));
-
-      const res = await fetch(`${BACKEND_URL}/api/analyse`, {
-        method: "POST",
-        body: form,
-      });
-
-      console.log("[Chunk] Response status:", res.status);
+      form.append("audio", { uri, name: "chunk.m4a", type: "audio/m4a" } as any);
+      const res = await fetch(`${BACKEND_URL}/api/transcribe`, { method: "POST", body: form });
       const data = await res.json();
-      console.log("[Chunk] Response:", JSON.stringify(data).slice(0, 200));
-
       const transcript: string = data.transcript ?? "";
-      if (transcript) {
-        console.log(`[Streamer] ${transcript}`);
-        pushComment({
-          id: `transcript-${Date.now()}`,
-          user: "🎙 you (live)",
-          text: transcript,
-          avatar: "🎤",
-          isTranscript: true,
-        });
-        transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
+      if (!transcript) return;
 
-        // Check for wake word — if detected, assistant handles this chunk, skip viewer reactions
-        if (WAKE_WORDS.test(transcript)) {
-          triggerAssistant(transcript);
-          setTranscribeStatus("");
-          return;
+      console.log(`[Streamer] ${transcript}`);
+      pushComment({ id: `transcript-${Date.now()}`, user: "🎙 you (live)", text: transcript, avatar: "🎤", isTranscript: true });
+      transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
+
+      if (WAKE_WORDS.test(transcript)) { triggerAssistant(transcript); return; }
+
+      if (!activePollRef.current) {
+        const poll = detectPoll(transcript);
+        if (poll) {
+          console.log(`[Poll] Detected: "${poll.options[0]}" vs "${poll.options[1]}"`);
+          setActivePoll(poll);
         }
       }
-
-      if (Array.isArray(data.comments)) pushCommentsWithDelay(data.comments);
-
-      setTranscribeStatus("");
     } catch (err) {
-      console.warn("[Chunk] Error:", err);
-      setTranscribeStatus("upload error");
-      setTimeout(() => setTranscribeStatus(""), 2000);
+      console.warn("[Audio] Error:", err);
     }
-  }, [pushComment, pushCommentsWithDelay]);
+  }, [pushComment]);
 
-  const recordNextChunk = useCallback(async () => {
-    if (!isLiveRef.current || !isTranscribingRef.current) {
-      console.log("[Record] Skipping — live:", isLiveRef.current, "transcribing:", isTranscribingRef.current);
-      return;
+  const audioLoop = useCallback(async () => {
+    const perm = await requestRecordingPermissionsAsync();
+    if (!perm.granted) { console.warn("[Audio loop] Permission denied"); return; }
+    await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+    while (isAudioLoopRef.current) {
+      try {
+        const rec = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+        audioRecordingRef.current = rec;
+        await rec.prepareToRecordAsync();
+        rec.record();
+        await new Promise(r => setTimeout(r, AUDIO_CHUNK_MS));
+        await rec.stop();
+        audioRecordingRef.current = null;
+        const uri = rec.uri;
+        if (uri && isAudioLoopRef.current) processAudioChunk(uri);
+      } catch (err) {
+        console.warn("[Audio loop] Error:", err);
+        audioRecordingRef.current = null;
+        await new Promise(r => setTimeout(r, 500));
+      }
     }
-    if (!cameraRef.current) {
-      console.warn("[Record] No camera ref");
-      return;
-    }
-    if (isRecordingRef.current) return;
+  }, [processAudioChunk]);
+
+  // ── Slow video loop for AI comments ──────────────────────────────────────────
+
+  const processVideoChunk = useCallback(async (uri: string) => {
     try {
-      isRecordingRef.current = true;
-      console.log("[Record] Starting chunk…");
-      const video = await cameraRef.current.recordAsync({ maxDuration: CHUNK_MS / 1000 });
-      isRecordingRef.current = false;
-      console.log("[Record] Chunk done, uri:", video?.uri);
-      if (video?.uri) processChunk(video.uri);
-      if (isLiveRef.current && isTranscribingRef.current) recordNextChunk();
+      const form = new FormData();
+      form.append("video", { uri, name: "chunk.mov", type: "video/quicktime" } as any);
+      form.append("context", JSON.stringify(transcriptContextRef.current.slice(-4)));
+      const res = await fetch(`${BACKEND_URL}/api/analyse`, { method: "POST", body: form });
+      const data = await res.json();
+      if (Array.isArray(data.comments)) pushCommentsWithDelay(data.comments);
     } catch (err) {
-      isRecordingRef.current = false;
-      console.warn("[Record] Error:", err);
+      console.warn("[Video] Error:", err);
     }
-  }, [processChunk]);
+  }, [pushCommentsWithDelay]);
+
+  const videoLoop = useCallback(async () => {
+    while (isVideoLoopRef.current) {
+      if (!cameraRef.current || isRecordingRef.current) { await new Promise(r => setTimeout(r, 500)); continue; }
+      try {
+        isRecordingRef.current = true;
+        const video = await cameraRef.current.recordAsync({ maxDuration: VIDEO_CHUNK_MS / 1000 });
+        isRecordingRef.current = false;
+        if (video?.uri && isVideoLoopRef.current) processVideoChunk(video.uri);
+      } catch (err) {
+        isRecordingRef.current = false;
+        console.warn("[Video loop] Error:", err);
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+  }, [processVideoChunk]);
 
   const stopRecording = useCallback(async () => {
+    isAudioLoopRef.current = false;
+    isVideoLoopRef.current = false;
+    if (audioRecordingRef.current) {
+      try { await audioRecordingRef.current.stop(); } catch {}
+      audioRecordingRef.current = null;
+    }
     if (isRecordingRef.current && cameraRef.current) {
       try { cameraRef.current.stopRecording(); } catch {}
     }
@@ -279,7 +353,12 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   }, []);
 
   useEffect(() => {
-    if (isTranscribing && isLive) recordNextChunk();
+    if (isTranscribing && isLive) {
+      isAudioLoopRef.current = true;
+      isVideoLoopRef.current = true;
+      audioLoop();
+      videoLoop();
+    }
   }, [isTranscribing]); // eslint-disable-line
 
   // ── Permissions ──────────────────────────────────────────────────────────────
@@ -400,6 +479,16 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
             )}
           </View>
         </View>
+
+        {/* Poll overlay */}
+        {activePoll && (
+          <PollOverlay
+            question={activePoll.question}
+            options={activePoll.options}
+            onClose={() => setActivePoll(null)}
+            latestComment={latestAiComment}
+          />
+        )}
 
         {/* Zee assistant banner */}
         {assistantActive && (

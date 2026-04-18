@@ -11,8 +11,9 @@ import BottomNavBar, { Tab } from "./src/components/BottomNavBar";
 import { COLORS } from "./src/constants/theme";
 
 export type AssistantAction = {
-  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "none";
+  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "create_poll" | "none";
   tab?: Tab;
+  poll?: { question: string; options: string[] };
 };
 
 export default function App() {
