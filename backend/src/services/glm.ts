@@ -1,12 +1,17 @@
 /**
- * GLM service — two-step pipeline:
- * Step 1: GLM 4.6V analyzes video thumbnails to understand content.
- * Step 2: GLM 5.1 uses that context to generate a Remotion composition JSON.
+ * Composition service — two-step pipeline using Gemini:
+ * Step 1: Gemini Flash analyzes video thumbnails to understand content.
+ * Step 2: Gemini Flash uses that context to generate a Remotion composition JSON.
  */
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { RemotionComposition, EditRequest } from "../types/remotion";
 
-const GLM_API_URL = `${process.env.ZAI_BASE_URL ?? "https://api.z.ai/api/coding/paas/v4"}/chat/completions`;
-/** System prompt for GLM 4.6V — extract video context from thumbnails */
+function getGemini() {
+  if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
+  const model = process.env.GEMINI_MODEL ?? "gemini-3.1-flash";
+  return new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model });
+}
+
 const VISION_SYSTEM_PROMPT = `You are a video analysis AI. You will be given thumbnail images from video clips along with their filenames and durations.
 
 Analyze each thumbnail and describe what you see. Focus on:
@@ -18,7 +23,6 @@ Analyze each thumbnail and describe what you see. Focus on:
 
 Return a concise analysis for each clip. Keep it brief but descriptive.`;
 
-/** System prompt for GLM — generate Remotion composition from context */
 const REMOTION_SYSTEM_PROMPT = `You are a video editing AI that outputs Remotion compositions as JSON.
 
 You will receive:
@@ -47,11 +51,7 @@ CRITICAL RULES:
 - totalDurationFrames = clip duration in seconds * fps
 - Return ONLY the JSON object, no markdown fences, no explanation`;
 
-/** Step 1: Analyze video thumbnails with GLM 4.6V */
 async function analyzeVideoContext(request: EditRequest): Promise<string> {
-  const apiKey = process.env.ZAI_API_KEY ?? process.env.GLM_API_KEY;
-  if (!apiKey) throw new Error("ZAI_API_KEY not set");
-
   const clipsWithThumbs = request.clips.filter((c) => c.thumbnail).slice(0, 1);
 
   if (clipsWithThumbs.length === 0) {
@@ -59,64 +59,32 @@ async function analyzeVideoContext(request: EditRequest): Promise<string> {
       request.clips.map((c) => `- ${c.name} (${c.duration}s)`).join("\n");
   }
 
-  // Build multimodal message content with thumbnails
-  const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
     {
-      type: "text",
-      text: `Analyze these video clip thumbnails:\n\n${request.clips.map((c) => `- ${c.name} (${c.duration}s)`).join("\n")}`,
+      text: `${VISION_SYSTEM_PROMPT}\n\nAnalyze these video clip thumbnails:\n\n${request.clips.map((c) => `- ${c.name} (${c.duration}s)`).join("\n")}`,
     },
-    ...clipsWithThumbs.map((c) => ({
-      type: "image_url" as const,
-      image_url: { url: c.thumbnail! },
-    })),
+    ...clipsWithThumbs.map((c) => {
+      // thumbnail is a data URL like "data:image/jpeg;base64,..."
+      const match = c.thumbnail!.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        return { inlineData: { mimeType: match[1], data: match[2] } };
+      }
+      return { text: `[thumbnail unavailable for ${c.name}]` };
+    }),
   ];
 
-  const res = await callGlm(apiKey, {
-    model: process.env.ZAI_MODEL ?? "glm-4.6v",
-    messages: [
-      { role: "system", content: VISION_SYSTEM_PROMPT },
-      { role: "user", content },
-    ],
-    temperature: 0.5,
-    max_tokens: 512,
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Vision API error ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? "No context available";
+  const result = await getGemini().generateContent(parts);
+  return result.response.text().trim() || "No context available";
 }
 
-/** Step 2: Generate Remotion composition with GLM 5.1 using video context */
 async function generateRemotionComposition(
   context: string,
   request: EditRequest
 ): Promise<RemotionComposition> {
-  const apiKey = process.env.ZAI_API_KEY ?? process.env.GLM_API_KEY;
-  if (!apiKey) throw new Error("ZAI_API_KEY not set");
+  const userMessage = `${REMOTION_SYSTEM_PROMPT}\n\nVideo Context Analysis:\n${context}\n\nClips:\n${request.clips.map((c) => `- ${c.name} (${c.duration}s)`).join("\n")}\n\nEdit instructions: ${request.prompt}`;
 
-  const userMessage = `Video Context Analysis:\n${context}\n\nClips:\n${request.clips.map((c) => `- ${c.name} (${c.duration}s)`).join("\n")}\n\nEdit instructions: ${request.prompt}`;
-
-  const res = await callGlm(apiKey, {
-    model: process.env.ZAI_MODEL_CHAT ?? "glm-5-turbo",
-    messages: [
-      { role: "system", content: REMOTION_SYSTEM_PROMPT },
-      { role: "user", content: userMessage },
-    ],
-    temperature: 0.3,
-    max_tokens: 4000,
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`GLM API error ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json();
-  const rawContent: string = data.choices?.[0]?.message?.content ?? "";
+  const result = await getGemini().generateContent(userMessage);
+  const rawContent = result.response.text().trim();
 
   const jsonStr = rawContent
     .replace(/^```(?:json)?\s*/m, "")
@@ -128,10 +96,7 @@ async function generateRemotionComposition(
   return composition;
 }
 
-/** Full pipeline: analyze thumbnails then generate composition */
-export async function generateComposition(
-  request: EditRequest
-): Promise<RemotionComposition> {
+export async function generateComposition(request: EditRequest): Promise<RemotionComposition> {
   let context = "";
 
   try {
@@ -143,18 +108,6 @@ export async function generateComposition(
   return generateRemotionComposition(context, request);
 }
 
-async function callGlm(apiKey: string, body: object) {
-  return fetch(GLM_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-}
-
-/** Basic validation of required composition fields */
 function validateComposition(c: RemotionComposition): void {
   if (!c.fps || !c.width || !c.height) {
     throw new Error("Composition missing required dimensions");

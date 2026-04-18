@@ -1,7 +1,6 @@
 /**
- * Hacktour backend — health, edit API (GLM), and live stream analysis
- * Video transcription: Gemini (multimodal video+audio)
- * Comment generation: z.ai GLM (OpenAI-compatible)
+ * Hacktour backend — health, edit API, and live stream analysis
+ * All AI: Gemini (transcription, comment generation, assistant)
  */
 import "dotenv/config";
 import express from "express";
@@ -11,16 +10,14 @@ import fs from "fs";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import OpenAI from "openai";
 import editRouter from "./routes/edit";
 import clipsRouter from "./routes/clips";
 import processRouter from "./routes/process";
+import youtubeRouter from "./routes/youtube";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const ZAI_MODEL = process.env.ZAI_MODEL ?? "glm-4.6v";
-const ZAI_MODEL_CHAT = process.env.ZAI_MODEL_CHAT ?? "glm-5-turbo";
 const upload = multer({ dest: "/tmp/hacktour-uploads/" });
 
 app.use(cors());
@@ -34,27 +31,12 @@ app.get("/api/health", (_req, res) => {
 app.use("/api", editRouter);
 app.use("/api", clipsRouter);
 app.use("/api", processRouter);
+app.use("/api", youtubeRouter);
 
-/** Creates a Gemini client only when the key is configured. */
-function getGeminiModel() {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("Missing GEMINI_API_KEY");
-  }
-
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  return genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
-}
-
-/** Creates a z.ai client only when the key is configured. */
-function getZaiClient() {
-  if (!process.env.ZAI_API_KEY || !process.env.ZAI_BASE_URL) {
-    throw new Error("Missing ZAI_API_KEY or ZAI_BASE_URL");
-  }
-
-  return new OpenAI({
-    apiKey: process.env.ZAI_API_KEY,
-    baseURL: process.env.ZAI_BASE_URL,
-  });
+function getGemini() {
+  if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
+  const model = process.env.GEMINI_MODEL ?? "gemini-3.1-flash";
+  return new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model });
 }
 
 /**
@@ -72,9 +54,8 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
   console.log(`[Transcribe] ${(req.file.size / 1024).toFixed(1)}KB`);
 
   try {
-    const gemini = getGeminiModel();
     const base64 = fs.readFileSync(filePath).toString("base64");
-    const result = await gemini.generateContent([
+    const result = await getGemini().generateContent([
       { inlineData: { mimeType: "audio/m4a", data: base64 } },
       "Transcribe exactly what is spoken in this audio clip. Return only the spoken words verbatim, nothing else. If nothing is spoken return empty string.",
     ]);
@@ -96,62 +77,57 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
  * multipart/form-data: { video: .mov, context: JSON string[] }
  * Returns: { transcript: string, comments: Array<{user,text,avatar}> }
  */
-app.post("/api/analyse", upload.single("video"), async (req, res) => {
-  if (!req.file) {
-    res.status(400).json({ error: "No video file uploaded" });
+app.post("/api/analyse", upload.single("frame"), async (req, res) => {
+  // Accept base64 directly from body, or fall back to uploaded file
+  const base64: string = req.body.base64 ?? (req.file ? fs.readFileSync(req.file.path).toString("base64") : "");
+  if (!base64) {
+    res.status(400).json({ error: "No frame provided" });
     return;
   }
 
-  const filePath = req.file.path;
   let context: string[] = [];
   try {
     context = JSON.parse(req.body.context ?? "[]");
   } catch {}
   const emojiMode = req.body.emojiMode === "1";
 
-  console.log(`[Analyse] ${(req.file.size / 1024).toFixed(1)}KB, context: ${context.length}, emojiMode: ${emojiMode}`);
+  console.log(`[Analyse] frame ${(base64.length * 0.75 / 1024).toFixed(1)}KB, context: ${context.length}`);
 
   try {
-    const gemini = getGeminiModel();
-    const zai = getZaiClient();
-    const base64 = fs.readFileSync(filePath).toString("base64");
-    const recentContext = context.join(" ... ");
+    const recentSpeech = context.join(" ... ");
 
-    const [txResult, preReactResult] = await Promise.all([
-      gemini.generateContent([
-        { inlineData: { mimeType: "video/quicktime", data: base64 } },
-        "Transcribe EXACTLY what the person is saying in this video clip. verbatim speech only — no descriptions, no labels, no context. If nothing is said, return empty string.",
-      ]),
-      zai.chat.completions.create({
-        model: ZAI_MODEL,
-        messages: [
-          {
-            role: "system",
-            content: "You simulate live stream chat viewers reacting in real time. Return ONLY a valid JSON array, no markdown, no explanation.",
-          },
-          {
-            role: "user",
-            content: `Recent stream context: "${recentContext}"
-
-Generate 4-6 short authentic viewer chat comments for a live stream.
+    const COMMENTS_SYSTEM = emojiMode
+      ? `You are a Twitch/Kick chat viewer in EMOJI ONLY mode. React using ONLY emojis — no words. Return a JSON array of 8-12 objects: [{"user":"name","text":"🔥😂","avatar":"emoji"},...]`
+      : `You are a hype Gen Z Twitch/Kick/Bilibili chat. Return ONLY a valid JSON array, no markdown.
+Generate 8-12 short authentic viewer comments reacting to the scene and streamer speech.
 Rules:
-- SHORT (1-8 words), like real live chat
-- Mix: hype, questions, jokes, emojis
+- SHORT (1-8 words) like real live chat
+- Mix: hype, jokes, memes, questions, reactions, emojis
 - Varied case (caps, lowercase, emoji-only)
-- Realistic usernames (numbers, underscores)
-${emojiMode ? "- EMOJI ONLY MODE: every comment text must be emojis only, no words at all!" : ""}
+- Realistic usernames with numbers/underscores
+- 80% English, 20% Chinese Simplified slang (哇塞, 666, 太厉害了, 笑死我了, 牛啊, 绝了, 哈哈哈, nb)
+- High energy — never repeat same comment
+[{"user":"name","text":"comment","avatar":"emoji"},...]`;
 
-[{"user":"name","text":"comment","avatar":"emoji"},...]`,
-          },
-        ],
-        temperature: 0.9,
-      }),
+    // Step 1: scene analysis with frame + transcript context
+    const videoRes = await getGemini().generateContent([
+      {
+        text: `You are a real-time stream analyzer. Describe what is happening in 1-2 sentences. Focus on actions, objects, notable events.${recentSpeech ? `\n\nStreamer just said: "${recentSpeech}"` : ""}`,
+      },
+      { inlineData: { data: base64, mimeType: "image/jpeg" } },
     ]);
+    const sceneAnalysis = videoRes.response.text().trim();
+    console.log(`[Scene] ${sceneAnalysis.slice(0, 100)}`);
 
-    const transcript = txResult.response.text().trim();
-    console.log(`[Transcript] ${transcript}`);
+    // Step 2: comments using scene + transcript context
+    const commentContext = [
+      `Scene: ${sceneAnalysis}`,
+      recentSpeech ? `IMPORTANT — streamer just said: "${recentSpeech}" — react to this directly` : "",
+    ].filter(Boolean).join("\n");
 
-    const reactRaw = preReactResult.choices[0].message.content ?? "";
+    const reactResult = await getGemini().generateContent(`${COMMENTS_SYSTEM}\n\n${commentContext}`);
+    const transcript = sceneAnalysis;
+    const reactRaw = reactResult.response.text().trim();
     const arrMatch = reactRaw.match(/\[[\s\S]*\]/);
     let comments: unknown[] = [];
     try {
@@ -160,15 +136,13 @@ ${emojiMode ? "- EMOJI ONLY MODE: every comment text must be emojis only, no wor
       console.warn("[React] JSON parse failed:", reactRaw.slice(0, 200));
     }
 
-    console.log(`[React] ${comments.length} comments via z.ai`);
+    console.log(`[React] ${comments.length} comments via Gemini`);
     res.json({ transcript, comments });
   } catch (err) {
     console.error("[Analyse] Error:", err);
     res.status(500).json({ error: "Analysis failed", detail: String(err) });
   } finally {
-    try {
-      fs.unlinkSync(filePath);
-    } catch {}
+    if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
   }
 });
 
@@ -235,31 +209,14 @@ If you detect the streamer is asking chat to choose between things, use create_p
 If no action needed use {"type":"none"}.`;
 
   try {
-    const zai = getZaiClient();
-    const result = await zai.chat.completions.create({
-      model: ZAI_MODEL_CHAT,
-      temperature: pollOnly ? 0 : 0.8,
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-        },
-        ...(!pollOnly && context.length
-          ? [
-              {
-                role: "user" as const,
-                content: `Recent stream context: ${context.slice(-3).join(" | ")}`,
-              },
-            ]
-          : []),
-        {
-          role: "user",
-          content: command,
-        },
-      ],
-    });
+    const fullPrompt = [
+      systemPrompt,
+      ...(!pollOnly && context.length ? [`Recent stream context: ${context.slice(-3).join(" | ")}`] : []),
+      command,
+    ].join("\n\n");
 
-    const assistRaw = result.choices[0].message.content ?? "";
+    const result = await getGemini().generateContent(fullPrompt);
+    const assistRaw = result.response.text().trim();
     const objMatch = assistRaw.match(/\{[\s\S]*\}/);
     let parsed: { response: string; action?: Record<string, unknown> } = {
       response: "Got it!",

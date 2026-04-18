@@ -29,10 +29,8 @@ import PollOverlay from "../components/PollOverlay";
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://100.80.219.114:3001";
 
-// Audio-only transcription chunks (fast)
 const AUDIO_CHUNK_MS = 3000;
-// Video chunks for AI comments (slower, visual context)
-const VIDEO_CHUNK_MS = 5000;
+const FRAME_INTERVAL_MS = 4000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -283,18 +281,19 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   // ── Poll detection helper (pure, no hooks) ───────────────────────────────────
 
   const detectPoll = (transcript: string): { question: string; options: [string, string] } | null => {
-    const orMatch = transcript.match(/\b([\w\s']+?)\s+or\s+([\w\s']+?)(?:\?|,|\.|$)/i);
+    // Match "X or Y" — allow apostrophes, hyphens, letters, spaces
+    const orMatch = transcript.match(/([\w\s'\-.]+?)\s+or\s+([\w\s'\-.]+?)(?:\?|,|\.|!|$)/i);
     if (!orMatch) return null;
     const clean = (s: string) => s
+      .replace(/^(are\s+we\s+going\s+to|going\s+to|we\s+going|gonna\s+go\s+to)\s+/i, "")
       .replace(/^(who('?s)?\s+(gonna|going to)\s+win[,\s]*)/i, "")
       .replace(/\b(tonight|today|right now|chat|guys)\b.*$/i, "")
       .replace(/^(the\s+streamer\s+(asks?|says)[,\s"]*)/i, "")
       .trim();
     const a = clean(orMatch[1]);
     const b = clean(orMatch[2]);
-    if (a.split(" ").length <= 4 && b.split(" ").length <= 4 && a.length > 1 && b.length > 1) {
-      const qMatch = transcript.match(/"([^"]+)"/);
-      const question = qMatch ? qMatch[1] : `${a} or ${b}?`;
+    if (a.split(" ").length <= 5 && b.split(" ").length <= 5 && a.length > 1 && b.length > 1) {
+      const question = `${a} or ${b}?`;
       return { question, options: [a, b] };
     }
     return null;
@@ -354,35 +353,35 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
   // ── Slow video loop for AI comments ──────────────────────────────────────────
 
-  const processVideoChunk = useCallback(async (uri: string) => {
+  const processFrame = useCallback(async (uri: string, base64: string) => {
     try {
       const form = new FormData();
-      form.append("video", { uri, name: "chunk.mov", type: "video/quicktime" } as any);
+      form.append("frame", { uri, name: "frame.jpg", type: "image/jpeg" } as any);
+      form.append("base64", base64);
       form.append("context", JSON.stringify(transcriptContextRef.current.slice(-4)));
       form.append("emojiMode", emojiMode ? "1" : "0");
       const res = await fetch(`${BACKEND_URL}/api/analyse`, { method: "POST", body: form });
       const data = await res.json();
       if (Array.isArray(data.comments)) pushCommentsWithDelay(data.comments);
     } catch (err) {
-      console.warn("[Video] Error:", err);
+      console.warn("[Frame] Error:", err);
     }
   }, [pushCommentsWithDelay, emojiMode]);
 
   const videoLoop = useCallback(async () => {
     while (isVideoLoopRef.current) {
-      if (!cameraRef.current || isRecordingRef.current) { await new Promise(r => setTimeout(r, 500)); continue; }
+      if (!cameraRef.current) { await new Promise(r => setTimeout(r, 500)); continue; }
       try {
-        isRecordingRef.current = true;
-        const video = await cameraRef.current.recordAsync({ maxDuration: VIDEO_CHUNK_MS / 1000 });
-        isRecordingRef.current = false;
-        if (video?.uri && isVideoLoopRef.current) processVideoChunk(video.uri);
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.3, base64: true, skipProcessing: true, width: 720 });
+        if (photo?.uri && photo?.base64 && isVideoLoopRef.current) {
+          processFrame(photo.uri, photo.base64);
+        }
       } catch (err) {
-        isRecordingRef.current = false;
-        console.warn("[Video loop] Error:", err);
-        await new Promise(r => setTimeout(r, 500));
+        console.warn("[Frame loop] Error:", err);
       }
+      await new Promise(r => setTimeout(r, FRAME_INTERVAL_MS));
     }
-  }, [processVideoChunk]);
+  }, [processFrame]);
 
   const stopRecording = useCallback(async () => {
     isAudioLoopRef.current = false;
@@ -473,7 +472,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     >
       {/* ── LAYER 1: Fullscreen camera ── */}
       {granted && !isCamOff ? (
-        <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing={facing} mode="video" />
+        <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing={facing} />
       ) : (
         <View style={[StyleSheet.absoluteFill, styles.camFallback]}>
           {!granted ? (
