@@ -203,9 +203,11 @@ Action types:
 - hype — blast a wave of hype messages into chat
 - shoutout → include "user":"<username>" to shout out a viewer (e.g. "z shoutout xX_fan99")
 - countdown → include "seconds":<number> (default 5) to start a countdown in chat
+- pull_up_clip → include "query":"<search description>" — streamer wants to show a clip from their library on stream. Extract the descriptive part as the search query. Examples: "pull up the clip where I was cooking" → query:"cooking", "show that dancing clip" → query:"dancing", "play the intro video" → query:"intro video"
 - none
 
 If you detect the streamer is asking chat to choose between things, use create_poll automatically.
+If the streamer says "pull up", "show", "play", or "find" followed by a clip description, use pull_up_clip with the descriptive part as the query.
 If no action needed use {"type":"none"}.`;
 
   try {

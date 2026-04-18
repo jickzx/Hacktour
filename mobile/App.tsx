@@ -12,13 +12,15 @@ import BottomNavBar, { Tab } from "./src/components/BottomNavBar";
 import { COLORS } from "./src/constants/theme";
 
 export type AssistantAction = {
-  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "create_poll" | "close_poll" | "emoji_mode" | "hype" | "shoutout" | "countdown" | "none";
+  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "create_poll" | "close_poll" | "emoji_mode" | "hype" | "shoutout" | "countdown" | "pull_up_clip" | "none";
   tab?: Tab;
   poll?: { question: string; options: string[] };
   /** for shoutout: the username to shout out */
   user?: string;
   /** for countdown: seconds (default 5) */
   seconds?: number;
+  /** for pull_up_clip: search query extracted from voice command */
+  query?: string;
 };
 
 export default function App() {

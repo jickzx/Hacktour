@@ -24,6 +24,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII } from "../constants/theme";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
+import ClipOverlay from "../components/ClipOverlay";
+import { searchClips } from "../services/api";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -86,6 +88,9 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const activePollRef = useRef(activePoll);
   const [latestAiComment, setLatestAiComment] = useState<string | undefined>();
   const [emojiMode, setEmojiMode] = useState(false);
+  const [activeClip, setActiveClip] = useState<{
+    id: string; title: string; sourceVideoUrl: string; durationSeconds: number; score: number;
+  } | null>(null);
   isLiveRef.current = isLive;
   activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
@@ -207,6 +212,33 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     }
   }, [pushComment]);
 
+  // ── Pull up clip: vector search the clip library ────────────────────────────
+
+  const handlePullUpClip = useCallback(async (query: string) => {
+    console.log(`[ClipOverlay] Searching for: "${query}"`);
+    pushComment({ id: `zee-clip-${Date.now()}`, user: "⚡ Zee", text: `🔍 Searching clips for "${query}"…`, avatar: "🤖" });
+
+    try {
+      const results = await searchClips(query, 1);
+      if (!results || results.length === 0) {
+        pushComment({ id: `zee-clip-miss-${Date.now()}`, user: "⚡ Zee", text: "Couldn't find a matching clip 😅", avatar: "🤖" });
+        return;
+      }
+      const best = results[0];
+      console.log(`[ClipOverlay] Best match: "${best.title}" (score: ${best.score.toFixed(3)})`);
+      setActiveClip({
+        id: best.id,
+        title: best.title,
+        sourceVideoUrl: best.sourceVideoUrl ?? "",
+        durationSeconds: best.durationSeconds,
+        score: best.score,
+      });
+    } catch (err) {
+      console.warn("[ClipOverlay] Search error:", err);
+      pushComment({ id: `zee-clip-err-${Date.now()}`, user: "⚡ Zee", text: "Clip search failed — try again!", avatar: "🤖" });
+    }
+  }, [pushComment]);
+
   // ── Assistant: handle pendingAction from App.tsx ─────────────────────────────
 
   useEffect(() => {
@@ -225,6 +257,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       case "hype":         triggerHype(); break;
       case "shoutout":     if (pendingAction.user) triggerShoutout(pendingAction.user); break;
       case "countdown":    triggerCountdown(pendingAction.seconds ?? 5); break;
+      case "pull_up_clip": if (pendingAction.query) handlePullUpClip(pendingAction.query); break;
     }
     onPendingActionConsumed();
   }, [pendingAction]); // eslint-disable-line
@@ -534,6 +567,14 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
             options={activePoll.options}
             onClose={() => setActivePoll(null)}
             latestComment={latestAiComment}
+          />
+        )}
+
+        {/* Clip overlay */}
+        {activeClip && (
+          <ClipOverlay
+            clip={activeClip}
+            onClose={() => setActiveClip(null)}
           />
         )}
 
