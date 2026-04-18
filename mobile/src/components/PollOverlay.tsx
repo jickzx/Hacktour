@@ -3,8 +3,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Animated, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
-import { COLORS, SPACING, RADII } from "../constants/theme";
+import { COLORS, SPACING, RADII, WEIGHTS } from "../constants/theme";
 
 interface Props {
   question: string;
@@ -65,10 +64,7 @@ export default function PollOverlay({ question, options, onClose, latestComment 
 
   return (
     <Animated.View style={[styles.container, { transform: [{ translateX: slideAnim }] }]}>
-      <LinearGradient
-        colors={["rgba(0,0,0,0.82)", "rgba(20,10,40,0.92)"]}
-        style={styles.card}
-      >
+      <View style={styles.card}>
         {/* Header */}
         <View style={styles.header}>
           <View style={styles.pollBadge}>
@@ -113,7 +109,7 @@ export default function PollOverlay({ question, options, onClose, latestComment 
         <Text style={styles.footer}>
           {totalVotes} vote{totalVotes !== 1 ? "s" : ""} · reacting live
         </Text>
-      </LinearGradient>
+      </View>
     </Animated.View>
   );
 }
@@ -129,8 +125,9 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: RADII.lg,
     padding: SPACING.md,
+    backgroundColor: "rgba(0,0,0,0.82)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: COLORS.glassBorder,
   },
   header: {
     flexDirection: "row",
@@ -146,7 +143,7 @@ const styles = StyleSheet.create({
   },
   pollBadgeText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: WEIGHTS.heavy,
     color: "#fff",
     letterSpacing: 1,
   },
@@ -158,10 +155,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  closeBtnText: { fontSize: 11, color: "rgba(255,255,255,0.6)", fontWeight: "700" },
+  closeBtnText: { fontSize: 11, color: "rgba(255,255,255,0.6)", fontWeight: WEIGHTS.bold },
   question: {
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: WEIGHTS.bold,
     color: "#fff",
     marginBottom: SPACING.md,
     lineHeight: 18,
@@ -174,13 +171,13 @@ const styles = StyleSheet.create({
   },
   optionLabel: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: WEIGHTS.semibold,
     color: "rgba(255,255,255,0.75)",
   },
   optionLabelWinning: { color: "#fff" },
   optionPct: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: WEIGHTS.bold,
     color: "rgba(255,255,255,0.5)",
   },
   optionPctWinning: { color: COLORS.accent },

@@ -21,7 +21,7 @@ import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo
 import { AudioModule, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
 import * as Speech from "expo-speech";
 import { LinearGradient } from "expo-linear-gradient";
-import { COLORS, SPACING, RADII } from "../constants/theme";
+import { COLORS, SPACING, RADII, WEIGHTS } from "../constants/theme";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 

@@ -1,10 +1,11 @@
 /** API service for communicating with the Stream Mind backend */
 import { Platform } from "react-native";
 
+// On web, the backend is always local; on device, read the IP from the env var
 const API_BASE =
   Platform.OS === "web"
     ? "http://localhost:3001"
-    : process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://100.80.219.114:3001";
+    : process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 export async function fetchHealth() {
   const res = await fetch(`${API_BASE}/api/health`);

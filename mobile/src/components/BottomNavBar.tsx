@@ -1,100 +1,139 @@
 /**
- * BottomNavBar — floating icon-only navbar with black gradient fade at bottom
+ * BottomNavBar — XHS-style tab bar.
+ * 5 slots: Home, Library, red + FAB → Live (center), Messages, Me → Edit.
  */
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
-import { COLORS, RADII } from "../constants/theme";
+import { COLORS, RADII, SPACING, WEIGHTS } from "../constants/theme";
 
-export type Tab = "edit" | "live" | "home" | "library";
-
-const NAV_ITEMS: { id: Tab; icon: string }[] = [
-  { id: "home", icon: "⌂" },
-  { id: "edit", icon: "✦" },
-  { id: "live", icon: "◉" },
-  { id: "library", icon: "▦" },
-];
+export type Tab = "home" | "library" | "edit" | "live";
 
 interface BottomNavBarProps {
   activeTab: Tab;
   onTabPress: (tab: Tab) => void;
+  onFabPress: () => void;
 }
 
-export default function BottomNavBar({ activeTab, onTabPress }: BottomNavBarProps) {
+export default function BottomNavBar({
+  activeTab,
+  onTabPress,
+  onFabPress,
+}: BottomNavBarProps) {
   return (
-    <View style={styles.container} pointerEvents="box-none">
-      {/* Black fade gradient */}
-      <LinearGradient
-        colors={["transparent", "rgba(0,0,0,0.85)"]}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-      />
+    <View style={styles.wrap} pointerEvents="box-none">
+      <View style={styles.bar}>
+        <NavItem
+          icon="⌂"
+          label="Home"
+          active={activeTab === "home"}
+          onPress={() => onTabPress("home")}
+        />
+        <NavItem
+          icon="▦"
+          label="Library"
+          active={activeTab === "library"}
+          onPress={() => onTabPress("library")}
+        />
 
-      {/* Icons row */}
-      <View style={styles.row}>
-        {NAV_ITEMS.map(({ id, icon }) => {
-          const isActive = activeTab === id;
-          return (
-            <TouchableOpacity
-              key={id}
-              style={styles.tab}
-              onPress={() => onTabPress(id)}
-              activeOpacity={0.6}
-            >
-              <Text style={[styles.icon, isActive && styles.iconActive]}>
-                {icon}
-              </Text>
-              {isActive && <View style={styles.dot} />}
-              {id === "live" && !isActive && <View style={styles.liveDot} />}
-            </TouchableOpacity>
-          );
-        })}
+        <TouchableOpacity style={styles.fab} onPress={onFabPress} activeOpacity={0.85}>
+          <Text style={styles.fabIcon}>+</Text>
+        </TouchableOpacity>
+
+        <NavItem
+          icon="◯"
+          label="Messages"
+          active={false}
+          onPress={() => onTabPress("home")}
+        />
+        <NavItem
+          icon="◔"
+          label="Me"
+          active={activeTab === "edit"}
+          onPress={() => onTabPress("edit")}
+        />
       </View>
     </View>
   );
 }
 
+function NavItem({
+  icon,
+  label,
+  active,
+  onPress,
+}: {
+  icon: string;
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={styles.tab} onPress={onPress} activeOpacity={0.7}>
+      <Text style={[styles.icon, active && styles.iconActive]}>{icon}</Text>
+      <Text style={[styles.label, active && styles.labelActive]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
+  wrap: {
     position: "absolute",
     bottom: 0,
     left: 0,
     right: 0,
-    height: 80,
-    justifyContent: "flex-end",
   },
-  row: {
+  bar: {
     flexDirection: "row",
-    justifyContent: "center",
     alignItems: "center",
-    paddingBottom: 24,
-    gap: 44,
+    justifyContent: "space-between",
+    backgroundColor: COLORS.background,
+    paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.sm,
+    paddingBottom: 28,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: COLORS.border,
   },
   tab: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    padding: 6,
+    paddingVertical: SPACING.xs,
   },
   icon: {
     fontSize: 22,
-    color: "rgba(255,255,255,0.4)",
+    color: COLORS.textMuted,
+    fontWeight: WEIGHTS.medium,
   },
   iconActive: {
-    color: "#fff",
+    color: COLORS.text,
   },
-  dot: {
-    marginTop: 4,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "#fff",
+  label: {
+    fontSize: 11,
+    color: COLORS.textMuted,
+    fontWeight: WEIGHTS.medium,
+    marginTop: 2,
+    letterSpacing: 0.2,
   },
-  liveDot: {
-    position: "absolute",
-    top: 2,
-    right: 2,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: COLORS.error,
+  labelActive: {
+    color: COLORS.text,
+    fontWeight: WEIGHTS.semibold,
+  },
+  fab: {
+    width: 56,
+    height: 40,
+    borderRadius: RADII.md,
+    backgroundColor: COLORS.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    marginHorizontal: SPACING.sm,
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  fabIcon: {
+    fontSize: 28,
+    color: "#FFFFFF",
+    fontWeight: WEIGHTS.light,
+    lineHeight: 30,
   },
 });

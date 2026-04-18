@@ -1,5 +1,7 @@
 /**
- * AIEditScreen — upload clips, describe the edit, and generate a Remotion plan.
+ * AIEditScreen — XHS dark-mode edit screen with real video upload.
+ * Flat black surfaces, coral accent, system font via WEIGHTS.
+ * Uploads actual video files via processEdit → /api/process.
  */
 import { useState } from "react";
 import {
@@ -18,7 +20,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { getThumbnailAsync } from "expo-video-thumbnails";
-import { COLORS, RADII, SPACING } from "../constants/theme";
+import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS } from "../constants/theme";
 import { processEdit } from "../services/api";
 
 const QUICK_PROMPTS = [
@@ -33,7 +35,9 @@ const QUICK_PROMPTS = [
 interface VideoClip {
   id: string;
   name: string;
+  /** Formatted display string e.g. "3:47" */
   duration: string;
+  /** Duration in seconds — backend /api/process expects a number */
   durationSecs: number;
   thumbnail: string | null;
   uri: string;
@@ -50,6 +54,21 @@ interface CompositionResult {
   audio: { volume: number };
 }
 
+/** Formats seconds into "m:ss" display string */
+const fmtDuration = (secs: number) =>
+  `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, "0")}`;
+
+/** Reads a local thumbnail URI and returns a truncated base64 data URL for the API */
+async function readThumbnailDataUrl(uri: string | null) {
+  if (!uri) return undefined;
+  try {
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
+    return `data:image/jpeg;base64,${base64.slice(0, 120000)}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export default function AIEditScreen() {
   const [prompt, setPrompt] = useState("");
   const [clips, setClips] = useState<VideoClip[]>([]);
@@ -58,6 +77,7 @@ export default function AIEditScreen() {
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSavedBanner, setShowSavedBanner] = useState(false);
+  const [activeQuick, setActiveQuick] = useState<string | null>(null);
 
   const handleUpload = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -81,17 +101,14 @@ export default function AIEditScreen() {
       let thumbnail: string | null = null;
 
       try {
-        const thumbResult = await getThumbnailAsync(asset.uri, {
-          quality: 0.25,
-          time: secs * 500,
-        });
+        const thumbResult = await getThumbnailAsync(asset.uri, { quality: 0.25, time: secs * 500 });
         thumbnail = thumbResult.uri;
       } catch {}
 
       newClips.push({
         id: asset.assetId ?? `${Date.now()}-${i}`,
         name: asset.fileName ?? `clip_${clips.length + i + 1}.mp4`,
-        duration: formatDuration(secs),
+        duration: fmtDuration(secs),
         durationSecs: secs,
         thumbnail,
         uri: asset.uri,
@@ -141,190 +158,160 @@ export default function AIEditScreen() {
     }
   };
 
+  const handleQuickPress = (label: string) => {
+    setActiveQuick(label);
+    setPrompt((p) => (p ? `${p}, ${label.toLowerCase()}` : label));
+  };
+
   return (
     <View style={styles.root}>
-      <LinearGradient
-        colors={[COLORS.background, COLORS.uploadBg, COLORS.background]}
-        style={StyleSheet.absoluteFill}
-      />
-
+      {/* "Clip saved" toast */}
       {showSavedBanner && (
         <View style={styles.savedBanner}>
           <Text style={styles.savedBannerText}>Clip saved to library</Text>
         </View>
       )}
 
+      {/* Header — mirrors HomeScreen layout */}
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.iconBtn}>
+          <Text style={styles.iconText}>☰</Text>
+        </TouchableOpacity>
+        <View style={styles.titleWrap}>
+          <Text style={styles.title}>Edit</Text>
+          <View style={styles.titleUnderline} />
+        </View>
+        <TouchableOpacity style={styles.iconBtn}>
+          <Text style={styles.iconText}>⌕</Text>
+        </TouchableOpacity>
+      </View>
+
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <Header />
-        <UploadZone clipCount={clips.length} onUpload={handleUpload} />
-        {clips.length > 0 && <ClipList clips={clips} onRemove={handleRemoveClip} />}
-        <PromptSection prompt={prompt} onPromptChange={setPrompt} />
-        <QuickPrompts
-          onSelect={(text) => setPrompt((value) => (value ? `${value}, ${text.toLowerCase()}` : text))}
+        {/* Upload zone — flat dark card */}
+        <TouchableOpacity onPress={handleUpload} activeOpacity={0.85} style={styles.uploadCard}>
+          <View style={styles.uploadPlus}>
+            <Text style={styles.uploadPlusText}>+</Text>
+          </View>
+          <Text style={styles.uploadTitle}>Upload Video Clips</Text>
+          <Text style={styles.uploadSub}>MP4, MOV, AVI — up to 2GB per clip</Text>
+          {clips.length > 0 && (
+            <View style={styles.clipBadge}>
+              <Text style={styles.clipBadgeText}>
+                {clips.length} clip{clips.length !== 1 ? "s" : ""} selected
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
+        {/* Horizontal clip strip with thumbnails */}
+        {clips.length > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.clipRow}
+            contentContainerStyle={styles.clipRowContent}
+          >
+            {clips.map((clip) => (
+              <View key={clip.id} style={styles.clipCard}>
+                <View style={styles.clipThumb}>
+                  {clip.thumbnail ? (
+                    <Image
+                      source={{ uri: clip.thumbnail }}
+                      style={styles.clipThumbImg}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <Text style={styles.clipThumbIcon}>▶</Text>
+                  )}
+                </View>
+                <Text style={styles.clipName} numberOfLines={1}>{clip.name}</Text>
+                <Text style={styles.clipDuration}>{clip.duration}</Text>
+                <TouchableOpacity style={styles.clipRemove} onPress={() => handleRemoveClip(clip.id)}>
+                  <Text style={styles.clipRemoveText}>×</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+
+        {/* Prompt input */}
+        <Text style={styles.sectionLabel}>Describe your edit</Text>
+        <TextInput
+          style={styles.promptInput}
+          value={prompt}
+          onChangeText={setPrompt}
+          placeholder="e.g. Add cinematic transitions, remove dead air, add subtitles…"
+          placeholderTextColor={COLORS.textMuted}
+          multiline
+          numberOfLines={4}
+          textAlignVertical="top"
         />
-        <GenerateButton
+        <Text style={styles.promptHint}>{prompt.length}/500 characters</Text>
+
+        {/* Quick prompt chips — XHS flat style, weight-only active state */}
+        <Text style={styles.sectionLabel}>Quick prompts</Text>
+        <View style={styles.chipWrap}>
+          {QUICK_PROMPTS.map((label) => (
+            <TouchableOpacity
+              key={label}
+              style={styles.chip}
+              onPress={() => handleQuickPress(label)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.chipText, activeQuick === label && styles.chipTextActive]}>
+                {label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Generate button — solid coral pill */}
+        <TouchableOpacity
+          style={[
+            styles.generateBtn,
+            (!prompt.trim() || clips.length === 0 || isGenerating) && styles.generateBtnDisabled,
+          ]}
           onPress={handleGenerate}
           disabled={!prompt.trim() || clips.length === 0 || isGenerating}
-          isGenerating={isGenerating}
-        />
-        {isGenerating && <LoadingIndicator />}
-        {error && <ErrorBanner message={error} />}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.generateText}>
+            {isGenerating ? "Generating…" : "Generate Edit"}
+          </Text>
+        </TouchableOpacity>
+
+        {isGenerating && (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator size="large" color={COLORS.primary} />
+            <Text style={styles.loadingText}>Processing video — this may take a moment…</Text>
+          </View>
+        )}
+
+        {error && (
+          <View style={styles.errorWrap}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
+
         {composition && <CompositionCard composition={composition} previewUri={previewUri} />}
       </ScrollView>
     </View>
   );
 }
 
-async function readThumbnailDataUrl(uri: string | null) {
-  if (!uri) return undefined;
-
-  try {
-    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
-    return `data:image/jpeg;base64,${base64.slice(0, 120000)}`;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatDuration(secs: number) {
-  const minutes = Math.floor(secs / 60);
-  const seconds = Math.floor(secs % 60);
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function Header() {
-  return (
-    <View style={styles.header}>
-      <LinearGradient colors={[COLORS.gradientStart, COLORS.gradientEnd]} style={styles.logoBar} />
-      <Text style={styles.brand}>Stream Mind</Text>
-      <Text style={styles.tagline}>AI Video Editor</Text>
-    </View>
-  );
-}
-
-function UploadZone({ clipCount, onUpload }: { clipCount: number; onUpload: () => void }) {
-  return (
-    <TouchableOpacity activeOpacity={0.7} onPress={onUpload} style={styles.uploadZone}>
-      <View style={styles.uploadIconWrap}>
-        <Text style={styles.uploadIcon}>+</Text>
-      </View>
-      <Text style={styles.uploadTitle}>Upload Video Clips</Text>
-      <Text style={styles.uploadSubtext}>MP4, MOV, AVI — up to 2GB per clip</Text>
-      {clipCount > 0 && (
-        <View style={styles.clipBadge}>
-          <Text style={styles.clipBadgeText}>{clipCount} clip{clipCount !== 1 ? "s" : ""} selected</Text>
-        </View>
-      )}
-    </TouchableOpacity>
-  );
-}
-
-function ClipList({ clips, onRemove }: { clips: VideoClip[]; onRemove: (id: string) => void }) {
-  return (
-    <View style={styles.clipListWrap}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        {clips.map((clip) => (
-          <View key={clip.id} style={styles.clipCard}>
-            <View style={styles.clipThumb}>
-              {clip.thumbnail ? (
-                <Image source={{ uri: clip.thumbnail }} style={styles.clipThumbImg} resizeMode="cover" />
-              ) : (
-                <Text style={styles.clipThumbIcon}>▶</Text>
-              )}
-            </View>
-            <Text numberOfLines={1} style={styles.clipName}>{clip.name}</Text>
-            <Text style={styles.clipDuration}>{clip.duration}</Text>
-            <TouchableOpacity onPress={() => onRemove(clip.id)} style={styles.clipRemove}>
-              <Text style={styles.clipRemoveText}>×</Text>
-            </TouchableOpacity>
-          </View>
-        ))}
-      </ScrollView>
-    </View>
-  );
-}
-
-function PromptSection({ prompt, onPromptChange }: { prompt: string; onPromptChange: (text: string) => void }) {
-  return (
-    <View style={styles.promptWrap}>
-      <Text style={styles.sectionLabel}>Describe your edit</Text>
-      <TextInput
-        multiline
-        numberOfLines={4}
-        onChangeText={onPromptChange}
-        placeholder="e.g. Add cinematic transitions, remove dead air, add subtitles..."
-        placeholderTextColor={COLORS.textMuted}
-        style={styles.promptInput}
-        textAlignVertical="top"
-        value={prompt}
-      />
-      <Text style={styles.promptHint}>{prompt.length}/500 characters</Text>
-    </View>
-  );
-}
-
-function QuickPrompts({ onSelect }: { onSelect: (text: string) => void }) {
-  return (
-    <View style={styles.quickWrap}>
-      <Text style={styles.sectionLabel}>Quick prompts</Text>
-      <View style={styles.pillRow}>
-        {QUICK_PROMPTS.map((label) => (
-          <TouchableOpacity key={label} activeOpacity={0.7} onPress={() => onSelect(label)} style={styles.pill}>
-            <Text style={styles.pillText}>{label}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function GenerateButton({
-  onPress,
-  disabled,
-  isGenerating,
+/** Shows generated edit metadata and optional video preview */
+function CompositionCard({
+  composition,
+  previewUri,
 }: {
-  onPress: () => void;
-  disabled: boolean;
-  isGenerating: boolean;
+  composition: CompositionResult;
+  previewUri: string | null;
 }) {
-  return (
-    <TouchableOpacity activeOpacity={0.8} disabled={disabled} onPress={onPress} style={styles.generateWrap}>
-      <LinearGradient
-        colors={disabled ? [COLORS.surface, COLORS.surfaceBorder] : [COLORS.gradientStart, COLORS.gradientEnd]}
-        style={styles.generateBtn}
-      >
-        <Text style={[styles.generateText, disabled && styles.generateTextDisabled]}>
-          {isGenerating ? "Generating..." : "Generate Edit"}
-        </Text>
-      </LinearGradient>
-    </TouchableOpacity>
-  );
-}
-
-function LoadingIndicator() {
-  return (
-    <View style={styles.loadingWrap}>
-      <ActivityIndicator size="large" color={COLORS.primaryLight} />
-      <Text style={styles.loadingText}>Processing video — this may take a moment...</Text>
-    </View>
-  );
-}
-
-function ErrorBanner({ message }: { message: string }) {
-  return (
-    <View style={styles.errorWrap}>
-      <Text style={styles.errorText}>{message}</Text>
-    </View>
-  );
-}
-
-function CompositionCard({ composition, previewUri }: { composition: CompositionResult; previewUri: string | null }) {
   const totalSecs = Math.round(composition.totalDurationFrames / composition.fps);
-
   return (
     <View style={styles.resultWrap}>
       {previewUri && (
@@ -338,21 +325,21 @@ function CompositionCard({ composition, previewUri }: { composition: Composition
       )}
       <LinearGradient colors={[COLORS.surface, COLORS.surfaceLight]} style={styles.resultCard}>
         <Text style={styles.resultTitle}>Edit Generated</Text>
-        <Row label="Resolution" value={`${composition.width}×${composition.height}`} />
-        <Row label="FPS" value={String(composition.fps)} />
-        <Row label="Duration" value={`${totalSecs}s`} />
-        <Row label="Clips" value={String(composition.clips.length)} />
-        <Row
+        <ResultRow label="Resolution" value={`${composition.width}×${composition.height}`} />
+        <ResultRow label="FPS" value={String(composition.fps)} />
+        <ResultRow label="Duration" value={`${totalSecs}s`} />
+        <ResultRow label="Clips" value={String(composition.clips.length)} />
+        <ResultRow
           label="Transitions"
-          value={composition.transitions.length ? composition.transitions.map((item) => item.type).join(", ") : "None"}
+          value={composition.transitions.length ? composition.transitions.map((t) => t.type).join(", ") : "None"}
         />
-        <Row label="Overlays" value={String(composition.overlays.length)} />
+        <ResultRow label="Overlays" value={String(composition.overlays.length)} />
       </LinearGradient>
     </View>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function ResultRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.resultRow}>
       <Text style={styles.resultLabel}>{label}</Text>
@@ -363,64 +350,172 @@ function Row({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.background },
-  scroll: { flex: 1 },
-  scrollContent: {
-    paddingHorizontal: SPACING.lg,
-    paddingTop: SPACING.xxl + 16,
-    paddingBottom: 100,
-  },
+
   savedBanner: {
     position: "absolute",
     top: 60,
     alignSelf: "center",
-    backgroundColor: COLORS.accent,
+    backgroundColor: COLORS.primary,
     borderRadius: RADII.full,
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.sm,
     zIndex: 100,
   },
-  savedBannerText: { color: COLORS.white, fontWeight: "700", fontSize: 14 },
-  header: { alignItems: "center", marginBottom: SPACING.xl },
-  logoBar: { width: 40, height: 4, borderRadius: 2, marginBottom: SPACING.md },
-  brand: { fontSize: 28, fontWeight: "800", color: COLORS.text, letterSpacing: -0.5 },
-  tagline: { fontSize: 14, color: COLORS.textSecondary, marginTop: SPACING.xs, letterSpacing: 2, textTransform: "uppercase" },
-  uploadZone: { borderWidth: 2, borderColor: COLORS.surfaceBorder, borderStyle: "dashed", borderRadius: RADII.lg, backgroundColor: COLORS.uploadBg, alignItems: "center", justifyContent: "center", paddingVertical: SPACING.xl, marginBottom: SPACING.lg },
-  uploadIconWrap: { width: 56, height: 56, borderRadius: RADII.full, backgroundColor: COLORS.surfaceLight, alignItems: "center", justifyContent: "center", marginBottom: SPACING.md },
-  uploadIcon: { fontSize: 28, fontWeight: "300", color: COLORS.primaryLight },
-  uploadTitle: { fontSize: 16, fontWeight: "600", color: COLORS.text, marginBottom: SPACING.xs },
-  uploadSubtext: { fontSize: 12, color: COLORS.textMuted },
-  clipBadge: { marginTop: SPACING.md, backgroundColor: COLORS.accentDim, borderRadius: RADII.full, paddingHorizontal: SPACING.md, paddingVertical: SPACING.xs },
-  clipBadgeText: { fontSize: 12, fontWeight: "600", color: COLORS.accent },
-  clipListWrap: { marginBottom: SPACING.lg },
-  clipCard: { width: 110, backgroundColor: COLORS.surface, borderRadius: RADII.md, padding: SPACING.sm, marginRight: SPACING.sm, alignItems: "center", borderWidth: 1, borderColor: COLORS.surfaceBorder },
-  clipThumb: { width: "100%", height: 60, backgroundColor: COLORS.surfaceLight, borderRadius: RADII.sm, alignItems: "center", justifyContent: "center", marginBottom: SPACING.sm, overflow: "hidden" },
+  savedBannerText: { color: "#FFFFFF", fontWeight: WEIGHTS.bold, fontSize: FONT_SIZES.sm },
+
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingTop: SPACING.xxl + 16,
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: SPACING.md,
+    gap: SPACING.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.borderLight,
+  },
+  iconBtn: { width: 28, height: 28, alignItems: "center", justifyContent: "center" },
+  iconText: { fontSize: 20, color: COLORS.text, fontWeight: WEIGHTS.regular },
+  titleWrap: { flex: 1, alignItems: "center" },
+  title: { fontSize: FONT_SIZES.lg, color: COLORS.text, fontWeight: WEIGHTS.bold },
+  titleUnderline: { marginTop: 4, width: 20, height: 2, borderRadius: 1, backgroundColor: COLORS.primary },
+
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: SPACING.lg, paddingTop: SPACING.lg, paddingBottom: 140 },
+
+  uploadCard: {
+    borderRadius: RADII.md,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+    paddingVertical: SPACING.xl + 8,
+    paddingHorizontal: SPACING.lg,
+    alignItems: "center",
+    marginBottom: SPACING.lg,
+  },
+  uploadPlus: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: COLORS.surfaceLight,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: SPACING.md,
+  },
+  uploadPlusText: { fontSize: 28, color: COLORS.primary, fontWeight: WEIGHTS.light, lineHeight: 32 },
+  uploadTitle: { fontSize: FONT_SIZES.lg, color: COLORS.text, fontWeight: WEIGHTS.semibold, marginBottom: 4 },
+  uploadSub: { fontSize: FONT_SIZES.sm, color: COLORS.textMuted, fontWeight: WEIGHTS.regular },
+  clipBadge: {
+    marginTop: SPACING.md,
+    backgroundColor: COLORS.primary,
+    borderRadius: RADII.full,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 4,
+  },
+  clipBadgeText: { fontSize: FONT_SIZES.xs + 1, color: "#FFFFFF", fontWeight: WEIGHTS.bold, letterSpacing: 0.4 },
+
+  clipRow: { marginBottom: SPACING.lg },
+  clipRowContent: { gap: SPACING.sm },
+  clipCard: {
+    width: 110,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADII.md,
+    padding: SPACING.sm,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+  },
+  clipThumb: {
+    width: "100%",
+    height: 64,
+    backgroundColor: COLORS.surfaceLight,
+    borderRadius: RADII.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: SPACING.sm,
+    overflow: "hidden",
+  },
   clipThumbImg: { width: "100%", height: "100%", borderRadius: RADII.sm },
-  clipThumbIcon: { fontSize: 18, color: COLORS.primaryLight },
-  clipName: { fontSize: 11, color: COLORS.text, fontWeight: "500", width: "100%" },
-  clipDuration: { fontSize: 10, color: COLORS.textMuted, marginTop: 2 },
-  clipRemove: { position: "absolute", top: 4, right: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: COLORS.error, alignItems: "center", justifyContent: "center" },
-  clipRemoveText: { color: COLORS.white, fontSize: 12, fontWeight: "700", lineHeight: 16 },
-  promptWrap: { marginBottom: SPACING.lg },
-  sectionLabel: { fontSize: 13, fontWeight: "600", color: COLORS.textSecondary, marginBottom: SPACING.sm, textTransform: "uppercase", letterSpacing: 1 },
-  promptInput: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.surfaceBorder, borderRadius: RADII.md, padding: SPACING.md, fontSize: 15, color: COLORS.text, minHeight: 110 },
-  promptHint: { fontSize: 11, color: COLORS.textMuted, textAlign: "right", marginTop: SPACING.xs },
-  quickWrap: { marginBottom: SPACING.xl },
-  pillRow: { flexDirection: "row", flexWrap: "wrap", gap: SPACING.sm },
-  pill: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.surfaceBorder, borderRadius: RADII.full, paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm },
-  pillText: { fontSize: 13, color: COLORS.textSecondary, fontWeight: "500" },
-  generateWrap: { marginTop: SPACING.sm },
-  generateBtn: { borderRadius: RADII.lg, paddingVertical: SPACING.lg, alignItems: "center" },
-  generateText: { fontSize: 16, fontWeight: "700", color: COLORS.white, letterSpacing: 0.3 },
-  generateTextDisabled: { color: COLORS.textMuted },
+  clipThumbIcon: { fontSize: 18, color: COLORS.primary },
+  clipName: { fontSize: 11, color: COLORS.text, fontWeight: WEIGHTS.medium, width: "100%" },
+  clipDuration: { fontSize: 10, color: COLORS.textMuted, fontWeight: WEIGHTS.regular, marginTop: 2 },
+  clipRemove: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: COLORS.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  clipRemoveText: { color: "#FFFFFF", fontSize: 14, fontWeight: WEIGHTS.bold, lineHeight: 16 },
+
+  sectionLabel: {
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
+    fontWeight: WEIGHTS.bold,
+    marginBottom: SPACING.sm,
+    marginTop: SPACING.sm,
+  },
+
+  promptInput: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADII.md,
+    padding: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
+    fontWeight: WEIGHTS.regular,
+    minHeight: 110,
+  },
+  promptHint: {
+    fontSize: 11,
+    color: COLORS.textMuted,
+    fontWeight: WEIGHTS.regular,
+    textAlign: "right",
+    marginTop: SPACING.xs,
+    marginBottom: SPACING.md,
+  },
+
+  chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: SPACING.md, marginBottom: SPACING.xl },
+  chip: { paddingVertical: SPACING.xs },
+  chipText: { fontSize: FONT_SIZES.md, color: COLORS.textMuted, fontWeight: WEIGHTS.medium },
+  chipTextActive: { color: COLORS.text, fontWeight: WEIGHTS.bold },
+
+  generateBtn: {
+    backgroundColor: COLORS.primary,
+    borderRadius: RADII.full,
+    paddingVertical: SPACING.md + 2,
+    alignItems: "center",
+    marginTop: SPACING.sm,
+  },
+  generateBtnDisabled: { backgroundColor: COLORS.surfaceLight },
+  generateText: { fontSize: FONT_SIZES.lg, color: "#FFFFFF", fontWeight: WEIGHTS.bold, letterSpacing: 0.3 },
+
   loadingWrap: { alignItems: "center", marginTop: SPACING.xl },
-  loadingText: { color: COLORS.textSecondary, marginTop: SPACING.md, fontSize: 14 },
-  errorWrap: { backgroundColor: "#EF444422", borderRadius: RADII.md, padding: SPACING.md, marginTop: SPACING.lg, borderWidth: 1, borderColor: "#EF444444" },
-  errorText: { color: COLORS.error, fontSize: 14 },
+  loadingText: { color: COLORS.textSecondary, marginTop: SPACING.md, fontSize: FONT_SIZES.sm },
+
+  errorWrap: {
+    backgroundColor: "rgba(255,36,66,0.13)",
+    borderRadius: RADII.md,
+    padding: SPACING.md,
+    marginTop: SPACING.lg,
+    borderWidth: 1,
+    borderColor: "rgba(255,36,66,0.3)",
+  },
+  errorText: { color: COLORS.error, fontSize: FONT_SIZES.md },
+
   videoPreview: { width: "100%", height: 220, borderRadius: RADII.lg, backgroundColor: "#000", marginBottom: SPACING.md },
   resultWrap: { marginTop: SPACING.xl },
   resultCard: { borderRadius: RADII.lg, padding: SPACING.lg, borderWidth: 1, borderColor: COLORS.primaryDark },
-  resultTitle: { fontSize: 18, fontWeight: "700", color: COLORS.accent, marginBottom: SPACING.md },
-  resultRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: SPACING.xs, borderBottomWidth: 1, borderBottomColor: COLORS.surfaceBorder },
-  resultLabel: { fontSize: 14, color: COLORS.textSecondary },
-  resultValue: { fontSize: 14, color: COLORS.text, fontWeight: "600" },
+  resultTitle: { fontSize: FONT_SIZES.xl, fontWeight: WEIGHTS.heavy, color: COLORS.primary, marginBottom: SPACING.md },
+  resultRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: SPACING.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.borderLight,
+  },
+  resultLabel: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary },
+  resultValue: { fontSize: FONT_SIZES.md, color: COLORS.text, fontWeight: WEIGHTS.semibold },
 });

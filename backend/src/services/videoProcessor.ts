@@ -1,9 +1,14 @@
 /**
  * videoProcessor — turns a RemotionComposition into a real video using ffmpeg.
- * Single-clip: -vf / -af chain (simple, fast)
- * Multi-clip:  filter_complex with xfade transitions + concat
+ * Single-clip: -vf / -af chain (simple, fast).
+ * Multi-clip:  filter_complex with xfade transitions + concat.
+ *
+ * Subtitle/drawtext overlay support is optional — if the installed ffmpeg
+ * was not built with libfreetype the drawtext filter is unavailable and
+ * overlays are skipped silently rather than crashing the job.
  */
 import ffmpeg from "fluent-ffmpeg";
+import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import type { RemotionComposition, TextOverlay, Transition } from "../types/remotion";
@@ -13,15 +18,40 @@ ffmpeg.setFfmpegPath("/opt/homebrew/bin/ffmpeg");
 const FONT_PATH = "/System/Library/Fonts/HelveticaNeue.ttc";
 const OUTPUT_DIR = "/tmp/hacktour-outputs";
 
+/** Detect once at startup whether drawtext is available in this ffmpeg build */
+const DRAWTEXT_AVAILABLE = (() => {
+  try {
+    const out = execSync("/opt/homebrew/bin/ffmpeg -filters 2>&1", { encoding: "utf8" });
+    return out.includes("drawtext");
+  } catch {
+    return false;
+  }
+})();
+
+if (!DRAWTEXT_AVAILABLE) {
+  console.warn("[videoProcessor] drawtext filter unavailable (ffmpeg built without libfreetype) — subtitle overlays will be skipped");
+}
+
 export function ensureOutputDir() {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
+
+/**
+ * Filter out overlays that cannot be rendered:
+ * - empty content
+ * - invalid fontSize (must be > 4 to be visible)
+ * - drawtext not available at all
+ */
+function usableOverlays(overlays: TextOverlay[]): TextOverlay[] {
+  if (!DRAWTEXT_AVAILABLE) return [];
+  return overlays.filter((o) => o.content.trim().length > 0 && (o.fontSize ?? 0) > 4);
 }
 
 /** Escape text for ffmpeg drawtext filter */
 function escapeDrawtext(text: string): string {
   return text
     .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\u2019") // replace apostrophe with curly quote to avoid shell issues
+    .replace(/'/g, "\u2019") // curly quote avoids shell quoting issues
     .replace(/:/g, "\\:")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]")
@@ -86,14 +116,13 @@ async function processSingleClip(
   const totalDur = c.totalDurationFrames / c.fps;
   const fadeOutStart = Math.max(0, totalDur - (c.audio.fadeOutFrames ?? 0) / c.fps);
 
-  // Build video filter chain
+  // Build video filter chain — skip overlays if drawtext unavailable or content empty
+  const validOverlays = usableOverlays(c.overlays);
   const vFilters: string[] = [
     `scale=1080:1920:force_original_aspect_ratio=decrease`,
     `pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black`,
+    ...validOverlays.map((o) => buildDrawtext(o, c.fps)),
   ];
-  for (const overlay of c.overlays) {
-    vFilters.push(buildDrawtext(overlay, c.fps));
-  }
 
   // Build audio filter chain
   const aFilters: string[] = [`volume=${c.audio.volume ?? 1}`];
@@ -104,8 +133,7 @@ async function processSingleClip(
     aFilters.push(`afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${((c.audio.fadeOutFrames ?? 0) / c.fps).toFixed(3)}`);
   }
 
-  console.log("[ffmpeg] overlays:", JSON.stringify(c.overlays));
-  console.log("[ffmpeg] vFilters:", JSON.stringify(vFilters));
+  console.log(`[ffmpeg] overlays total: ${c.overlays.length}, usable: ${validOverlays.length}`);
 
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
@@ -138,8 +166,8 @@ async function processMultiClip(
 ): Promise<void> {
   const clips = c.clips;
   const fps = c.fps;
+  const validOverlays = usableOverlays(c.overlays);
 
-  // Build filter_complex string
   const filterParts: string[] = [];
 
   // Scale each input
@@ -182,14 +210,14 @@ async function processMultiClip(
     timeOffset += (clips[i + 1].trimEnd ?? clips[i + 1].duration) - (clips[i + 1].trimStart ?? 0) - tDur;
   }
 
-  // Apply overlays on top of composited video
+  // Apply text overlays on top of composited video
   let videoChain = prevV;
-  for (let i = 0; i < c.overlays.length; i++) {
-    const outLabel = i === c.overlays.length - 1 ? "vout" : `vt${i}`;
-    filterParts.push(`[${videoChain}]${buildDrawtext(c.overlays[i], fps)}[${outLabel}]`);
+  for (let i = 0; i < validOverlays.length; i++) {
+    const outLabel = i === validOverlays.length - 1 ? "vout" : `vt${i}`;
+    filterParts.push(`[${videoChain}]${buildDrawtext(validOverlays[i], fps)}[${outLabel}]`);
     videoChain = outLabel;
   }
-  if (c.overlays.length === 0) {
+  if (validOverlays.length === 0) {
     filterParts.push(`[${prevV}]null[vout]`);
   }
 
