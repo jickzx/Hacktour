@@ -3,6 +3,11 @@
  * All AI: Gemini (transcription, comment generation, assistant)
  */
 import "dotenv/config";
+import dotenv from "dotenv";
+import path from "path";
+// Also load the monorepo root .env so shared keys (GEMINI_API_KEY, NGROK_AUTHTOKEN…)
+// only need to live in one place. Won't override anything already set.
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 import express from "express";
 import cors from "cors";
 import multer from "multer";
@@ -35,10 +40,17 @@ app.use("/api", processRouter);
 app.use("/api", youtubeRouter);
 app.use("/api", photosRouter);
 
-function getGemini() {
-  if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
-  const model = process.env.GEMINI_MODEL ?? "gemini-3.1-flash";
+function getGemini(model: string) {
+  if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY — set it in backend/.env or root .env");
   return new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model });
+}
+
+function getChatGemini() {
+  return getGemini(process.env.GEMINI_CHAT_MODEL ?? "gemini-3.1-flash-lite-preview");
+}
+
+function getAssistantGemini() {
+  return getGemini(process.env.GEMINI_ASSISTANT_MODEL ?? "gemini-3.1-flash-live-preview");
 }
 
 /**
@@ -57,7 +69,7 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
 
   try {
     const base64 = fs.readFileSync(filePath).toString("base64");
-    const result = await getGemini().generateContent([
+    const result = await getChatGemini().generateContent([
       { inlineData: { mimeType: "audio/m4a", data: base64 } },
       "Transcribe exactly what is spoken in this audio clip. Return only the spoken words verbatim, nothing else. If nothing is spoken return empty string.",
     ]);
@@ -112,7 +124,7 @@ Rules:
 [{"user":"name","text":"comment","avatar":"emoji"},...]`;
 
     // Step 1: scene analysis with frame + transcript context
-    const videoRes = await getGemini().generateContent([
+    const videoRes = await getChatGemini().generateContent([
       {
         text: `You are a real-time stream analyzer. Describe what is happening in 1-2 sentences. Focus on actions, objects, notable events.${recentSpeech ? `\n\nStreamer just said: "${recentSpeech}"` : ""}`,
       },
@@ -127,7 +139,7 @@ Rules:
       recentSpeech ? `IMPORTANT — streamer just said: "${recentSpeech}" — react to this directly` : "",
     ].filter(Boolean).join("\n");
 
-    const reactResult = await getGemini().generateContent(`${COMMENTS_SYSTEM}\n\n${commentContext}`);
+    const reactResult = await getChatGemini().generateContent(`${COMMENTS_SYSTEM}\n\n${commentContext}`);
     const transcript = sceneAnalysis;
     const reactRaw = reactResult.response.text().trim();
     const arrMatch = reactRaw.match(/\[[\s\S]*\]/);
@@ -163,7 +175,7 @@ app.post("/api/detect-poll", async (req, res) => {
   if (!looksLikePoll) { res.json({ poll: null }); return; }
 
   try {
-    const result = await getGemini().generateContent({
+    const result = await getAssistantGemini().generateContent({
       contents: [{ role: "user", parts: [{ text: `Streamer said: "${transcript}"\n\nOnly call create_poll if the streamer is DIRECTLY asking chat to choose between two specific named options (e.g. "McDonald's or KFC?", "cats or dogs?", "iOS or Android?"). The question must be explicit — not a statement, not rhetorical. If in any doubt, do NOT call create_poll.` }] }],
       tools: [{
         functionDeclarations: [{
@@ -216,7 +228,7 @@ app.post("/api/outfit", upload.single("photo"), async (req, res) => {
     const base64 = fs.readFileSync(filePath).toString("base64");
     const mimeType = req.file.mimetype || "image/jpeg";
 
-    const result = await getGemini().generateContent([
+    const result = await getChatGemini().generateContent([
       { inlineData: { mimeType, data: base64 } },
       `Identify each distinct clothing, footwear, or accessory item the person in this image is wearing.
 Return ONLY a JSON array, no markdown. Max 5 items, most prominent first.
@@ -311,10 +323,14 @@ Action types:
 - shoutout → include "user":"<username>" to shout out a viewer (e.g. "panda shoutout xX_fan99")
 - countdown → include "seconds":<number> (default 5) to start a countdown in chat
 - pull_up_clip → include "query":"<search description>" — streamer wants to show a clip from their library on stream. Extract the descriptive part as the search query. Examples: "pull up the clip where I was cooking" → query:"cooking", "show that dancing clip" → query:"dancing", "play the intro video" → query:"intro video"
+- take_photos → include "photos":{"poses":["pose 1 instruction","pose 2 instruction","pose 3 instruction","pose 4 instruction"]}
+- identify_outfit → no extra fields; the app will capture a frame of the streamer and post shopping links in chat
+- change_voice → include "voice":{"preset":"default"|"chill"|"hype"|"deep"|"chipmunk"} OR specific tweaks "voice":{"rate":0.5-2.0,"pitch":0.5-2.0}. Persists to the streamer's settings.
 - none
 
 If the streamer says anything like "take pictures of me", "take my photo", "photo shoot", "snap me", use take_photos with 3-5 fun, short pose instructions (e.g. "big smile", "look over your shoulder", "peace sign", "candid laugh").
 If the streamer says anything like "what am I wearing", "rate my fit", "find my outfit", "where can I buy this", "link my clothes", "what's this shirt", use identify_outfit.
+If the streamer says anything about YOUR voice — "change your voice", "talk slower/faster", "use a deeper/higher voice", "sound like a chipmunk", "go hype mode voice", "chill voice", "reset your voice", "sound normal" — use change_voice. Map to a preset when possible; otherwise set rate/pitch directly (rate>1 = faster, pitch>1 = higher). Keep your spoken "response" field in the NEW voice style it will be read back in.
 If you detect the streamer is asking chat to choose between things, use create_poll automatically.
 If the streamer says "pull up", "show", "play", or "find" followed by a clip description, use pull_up_clip with the descriptive part as the query.
 If no action needed use {"type":"none"}.`;
@@ -326,7 +342,7 @@ If no action needed use {"type":"none"}.`;
       command,
     ].join("\n\n");
 
-    const result = await getGemini().generateContent(fullPrompt);
+    const result = await getAssistantGemini().generateContent(fullPrompt);
     const assistRaw = result.response.text().trim();
     const objMatch = assistRaw.match(/\{[\s\S]*\}/);
     let parsed: { response: string; action?: Record<string, unknown> } = {
@@ -375,7 +391,7 @@ Return ONLY a JSON object, no markdown:
 If any comments look toxic/spammy, set modAlert to a short warning string instead of null.`;
 
   try {
-    const result = await getGemini().generateContent(prompt);
+    const result = await getAssistantGemini().generateContent(prompt);
     const raw = result.response.text().trim();
     const match = raw.match(/\{[\s\S]*\}/);
     let parsed = { suggestedReply: "", chatSummary: "", modAlert: null as string | null };

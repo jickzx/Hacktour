@@ -27,14 +27,13 @@ import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
 import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem } from "../services/api";
-import { getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings } from "../services/voiceSettings";
+import { getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings, updateVoiceSettings, VOICE_PRESETS, VoicePreset, VoiceSettings } from "../services/voiceSettings";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://100.80.219.114:3001";
-
 const AUDIO_CHUNK_MS = 3000;
 const FRAME_INTERVAL_MS = 4000;
+const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://100.80.219.114:3001";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +69,7 @@ const PANDA_COMMANDS = [
   { cmd: "hey panda go to edit", desc: "Navigate to edit tab" },
   { cmd: "hey panda take my photo", desc: "Start a guided photo shoot" },
   { cmd: "hey panda what am I wearing", desc: "Identify outfit + shop links" },
+  { cmd: "hey panda sound like a chipmunk", desc: "Change Panda's voice" },
 ];
 
 // Hard cap on pictures per "take photos of me" request
@@ -224,7 +224,6 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     });
   }, [pushComment]);
 
-
   // ── Fake viewer votes while poll is active ───────────────────────────────────
 
   useEffect(() => {
@@ -336,6 +335,29 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       case "shoutout":     if (pendingAction.user) triggerShoutout(pendingAction.user); break;
       case "countdown":    triggerCountdown(pendingAction.seconds ?? 5); break;
       case "pull_up_clip": if (pendingAction.query) handlePullUpClip(pendingAction.query); break;
+      case "pull_up_clip": if (pendingAction.query) handlePullUpClip(pendingAction.query); break;
+      case "take_photos": {
+        const poses = pendingAction.photos?.poses?.length
+          ? pendingAction.photos.poses
+          : ["big smile", "look over your shoulder", "peace sign", "candid laugh"];
+        if (!photoSessionRef.current) startPhotoSession(poses);
+        break;
+      }
+      case "identify_outfit":
+        scanOutfit();
+        break;
+      case "change_voice": {
+        const v = pendingAction.voice;
+        if (!v) break;
+        let patch: Partial<VoiceSettings> = {};
+        if (v.preset && VOICE_PRESETS[v.preset as VoicePreset]) {
+          patch = { ...patch, ...VOICE_PRESETS[v.preset as VoicePreset] };
+        }
+        if (typeof v.rate === "number")  patch.rate  = Math.max(0.5, Math.min(2.0, v.rate));
+        if (typeof v.pitch === "number") patch.pitch = Math.max(0.5, Math.min(2.0, v.pitch));
+        if (Object.keys(patch).length) updateVoiceSettings(patch);
+        break;
+      }
     }
     onPendingActionConsumed();
   }, [pendingAction]); // eslint-disable-line
@@ -349,7 +371,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     // Extract everything after the wake word as the command
     const afterWake = fullTranscript.slice(fullTranscript.indexOf(match[0]) + match[0].length).trim();
     const rawCommand = afterWake || "hello";
-    // In emoji mode, append instruction so Zee replies in emojis
+    // In emoji mode, append instruction so Panda replies in emojis
     const command = emojiMode ? `${rawCommand} (reply using emojis only, no words)` : rawCommand;
 
     console.log(`[Panda] Wake word detected, command: "${rawCommand}"`);
@@ -363,6 +385,16 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       });
       const data = await res.json();
       console.log(`[Panda] Response: "${data.response}", Action:`, data.action);
+
+      // Apply voice changes BEFORE speaking so the acknowledgement uses the new voice
+      if (data.action?.type === "change_voice" && data.action.voice) {
+        const v = data.action.voice as { preset?: VoicePreset; rate?: number; pitch?: number };
+        let patch: Partial<VoiceSettings> = {};
+        if (v.preset && VOICE_PRESETS[v.preset]) patch = { ...patch, ...VOICE_PRESETS[v.preset] };
+        if (typeof v.rate === "number")  patch.rate  = Math.max(0.5, Math.min(2.0, v.rate));
+        if (typeof v.pitch === "number") patch.pitch = Math.max(0.5, Math.min(2.0, v.pitch));
+        if (Object.keys(patch).length) await updateVoiceSettings(patch);
+      }
 
       // Speak the response
       if (data.response) speak(data.response);
@@ -484,6 +516,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       form.append("context", JSON.stringify(transcriptContextRef.current.slice(-4)));
       form.append("emojiMode", emojiMode ? "1" : "0");
       const res = await fetch(`${BACKEND_URL}/api/analyse`, { method: "POST", body: form });
+      if (!res.ok) throw new Error(`analyse ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data.comments)) pushCommentsWithDelay(data.comments);
     } catch (err) {
@@ -495,7 +528,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     while (isVideoLoopRef.current) {
       if (!cameraRef.current) { await new Promise(r => setTimeout(r, 500)); continue; }
       try {
-        const photo = await cameraRef.current.takePictureAsync({ quality: 0.3, base64: true, skipProcessing: true, width: 720 });
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.3, base64: true, skipProcessing: true });
         if (photo?.uri && photo?.base64 && isVideoLoopRef.current) {
           processFrame(photo.uri, photo.base64);
         }
@@ -566,7 +599,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       speak(firstLine);
       pushComment({
         id: `pose-${Date.now()}-${i}`,
-        user: "📸 Gemini",
+        user: "📸 Panda",
         text: `Pose ${i + 1}/${poses.length}: ${pose} — say "ready"`,
         avatar: "✨",
       });
@@ -577,7 +610,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       if (!photoSessionRef.current) break;
       if (result === "stop") {
         speak("No worries, stopping the shoot.");
-        pushComment({ id: `pose-stop-${Date.now()}`, user: "📸 Gemini", text: "stopped by streamer", avatar: "✨" });
+        pushComment({ id: `pose-stop-${Date.now()}`, user: "📸 Panda", text: "stopped by streamer", avatar: "✨" });
         stoppedEarly = true;
         break;
       }
@@ -618,7 +651,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       speak(`Got ${savedOriginals.length} shots. Making them cinematic, one sec.`);
       pushComment({
         id: `edit-start-${Date.now()}`,
-        user: "📸 Gemini",
+        user: "📸 Panda",
         text: `Editing ${savedOriginals.length} photos…`,
         avatar: "✨",
       });
@@ -646,7 +679,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       speak(`Done! Your ${total} original shots and cinematic edits are in the library.`);
       pushComment({
         id: `pose-done-${Date.now()}`,
-        user: "📸 Gemini",
+        user: "📸 Panda",
         text: `Saved ${total} originals + ${total} cinematic edits`,
         avatar: "✨",
       });
@@ -685,18 +718,18 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
       if (!items.length) {
         speak("Hmm, I can't see any clothes clearly. Try stepping back?");
-        pushComment({ id: `fit-empty-${Date.now()}`, user: "👗 Gemini", text: "Can't see the fit clearly — try stepping back", avatar: "✨" });
+        pushComment({ id: `fit-empty-${Date.now()}`, user: "👗 Panda", text: "Can't see the fit clearly — try stepping back", avatar: "✨" });
       } else {
         const intro = items.length === 1
           ? `Spotted your ${items[0].label.toLowerCase()}. Dropping a link in chat.`
           : `Spotted ${items.length} pieces. Dropping links in chat.`;
         speak(intro);
-        pushComment({ id: `fit-head-${Date.now()}`, user: "👗 Gemini", text: intro, avatar: "✨" });
+        pushComment({ id: `fit-head-${Date.now()}`, user: "👗 Panda", text: intro, avatar: "✨" });
         items.forEach((item, i) => {
           setTimeout(() => {
             pushComment({
               id: `fit-${Date.now()}-${i}`,
-              user: "👗 Gemini",
+              user: "👗 Panda",
               text: `${item.label} → tap to shop`,
               avatar: "🛍",
               link: item.searchUrl,
@@ -706,7 +739,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       }
     } catch (err) {
       console.warn("[Outfit] Error:", err);
-      pushComment({ id: `fit-err-${Date.now()}`, user: "👗 Gemini", text: "Outfit scan failed — try again", avatar: "✨" });
+      pushComment({ id: `fit-err-${Date.now()}`, user: "👗 Panda", text: "Outfit scan failed — try again", avatar: "✨" });
     } finally {
       setOutfitScanning(false);
       outfitBusyRef.current = false;
@@ -885,7 +918,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         {/* Outfit scan banner */}
         {outfitScanning && (
           <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
-            <Text style={styles.zeeText}>👗 Gemini is scanning your fit…</Text>
+            <Text style={styles.zeeText}>👗 Panda is scanning your fit…</Text>
           </View>
         )}
 

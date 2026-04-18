@@ -63,7 +63,7 @@ router.post("/process", upload.array("videos"), async (req, res) => {
       if (process.env.GEMINI_API_KEY) {
         console.log("[Process] Transcribing audio...");
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const gemini = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
+        const gemini = genAI.getGenerativeModel({ model: "gemini-3.1-flash-live-preview" });
         const base64 = fs.readFileSync(inputPaths[0]).toString("base64");
         const mimeType = files[0].originalname?.endsWith(".mov") ? "video/quicktime" : "video/mp4";
         const result = await gemini.generateContent([

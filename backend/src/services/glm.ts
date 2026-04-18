@@ -8,7 +8,7 @@ import type { RemotionComposition, EditRequest } from "../types/remotion";
 
 function getGemini() {
   if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
-  const model = process.env.GEMINI_MODEL ?? "gemini-3.1-flash";
+  const model = process.env.GEMINI_MODEL ?? "gemini-3.1-flash-live-preview";
   return new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model });
 }
 

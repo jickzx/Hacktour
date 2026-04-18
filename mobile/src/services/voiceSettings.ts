@@ -17,6 +17,16 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   voiceId: undefined,
 };
 
+export type VoicePreset = "default" | "chill" | "hype" | "deep" | "chipmunk";
+
+export const VOICE_PRESETS: Record<VoicePreset, Partial<VoiceSettings>> = {
+  default:  { rate: 1.1, pitch: 1.0 },
+  chill:    { rate: 0.9, pitch: 0.9 },
+  hype:     { rate: 1.3, pitch: 1.2 },
+  deep:     { rate: 1.0, pitch: 0.7 },
+  chipmunk: { rate: 1.4, pitch: 1.8 },
+};
+
 const FILE = `${FileSystem.documentDirectory}voice-settings.json`;
 
 let current: VoiceSettings = { ...DEFAULT_VOICE_SETTINGS };

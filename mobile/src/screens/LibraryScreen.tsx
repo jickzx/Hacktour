@@ -222,7 +222,7 @@ export default function LibraryScreen() {
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>📸</Text>
               <Text style={styles.emptyTitle}>No photos yet</Text>
-              <Text style={styles.emptySubtitle}>Say "Gemini, take pictures of me" on the live tab</Text>
+              <Text style={styles.emptySubtitle}>Say "Panda, take pictures of me" on the live tab</Text>
             </View>
           }
           renderItem={({ item }) => {

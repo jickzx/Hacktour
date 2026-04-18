@@ -15,7 +15,24 @@ import { COLORS } from "./src/constants/theme";
 import { loadVoiceSettings } from "./src/services/voiceSettings";
 
 export type AssistantAction = {
-  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "create_poll" | "close_poll" | "emoji_mode" | "hype" | "shoutout" | "countdown" | "pull_up_clip" | "none";
+  type:
+    | "navigate_tab"
+    | "go_live"
+    | "end_stream"
+    | "mute"
+    | "unmute"
+    | "flip_camera"
+    | "create_poll"
+    | "close_poll"
+    | "emoji_mode"
+    | "hype"
+    | "shoutout"
+    | "countdown"
+    | "pull_up_clip"
+    | "take_photos"
+    | "identify_outfit"
+    | "change_voice"
+    | "none";
   tab?: Tab;
   poll?: { question: string; options: string[] };
   /** for shoutout: the username to shout out */
@@ -24,6 +41,13 @@ export type AssistantAction = {
   seconds?: number;
   /** for pull_up_clip: search query extracted from voice command */
   query?: string;
+  photos?: { poses: string[] };
+  /** for change_voice: preset or explicit rate/pitch */
+  voice?: {
+    preset?: "default" | "chill" | "hype" | "deep" | "chipmunk";
+    rate?: number;
+    pitch?: number;
+  };
 };
 
 /** Force all Text nodes to default to white so dark-mode screens don't need per-component colour props */

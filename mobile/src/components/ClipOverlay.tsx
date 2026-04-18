@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Animated, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { Video, ResizeMode, AVPlaybackStatusSuccess } from "expo-av";
+import { Video, ResizeMode, AVPlaybackStatus, AVPlaybackStatusSuccess } from "expo-av";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII } from "../constants/theme";
 
@@ -78,8 +78,8 @@ export default function ClipOverlay({ clip, onClose }: Props) {
               resizeMode={ResizeMode.CONTAIN}
               shouldPlay
               isLooping={false}
-              onPlaybackStatusUpdate={(status) => {
-                if (status.isLoaded) handlePlaybackUpdate(status as AVPlaybackStatusSuccess);
+              onPlaybackStatusUpdate={(status: AVPlaybackStatus) => {
+                if (status.isLoaded) handlePlaybackUpdate(status);
               }}
             />
           </View>
