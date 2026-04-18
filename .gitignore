@@ -1,2 +1,12 @@
 .DS_Store
 github-accounts.json
+
+node_modules/
+dist/
+.next/
+*.tsbuildinfo
+
+public/sw.js
+public/workbox-*.js
+public/sw.js.map
+public/workbox-*.js.map
