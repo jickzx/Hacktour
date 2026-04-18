@@ -251,7 +251,16 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(() => { setRefreshing(true); loadAll(); }, [loadAll]);
 
-  const allPosts = useMemo(() => [...clipPosts, ...STATIC_POSTS], [clipPosts]);
+  const allPosts = useMemo(() => {
+    if (clipPosts.length === 0) return STATIC_POSTS;
+    const merged: Post[] = [...STATIC_POSTS];
+    const step = Math.max(2, Math.floor(STATIC_POSTS.length / (clipPosts.length + 1)));
+    clipPosts.forEach((clip, i) => {
+      const insertAt = Math.min(step * (i + 1) + i, merged.length);
+      merged.splice(insertAt, 0, clip);
+    });
+    return merged;
+  }, [clipPosts]);
 
   const { leftCol, rightCol } = useMemo(() => {
     const left: Post[] = [], right: Post[] = [];

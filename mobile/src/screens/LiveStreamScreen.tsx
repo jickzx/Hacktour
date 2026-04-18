@@ -31,7 +31,7 @@ import { getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings } from "../
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://100.80.219.114:3001";
+const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 const AUDIO_CHUNK_MS = 3000;
 const FRAME_INTERVAL_MS = 4000;
@@ -495,7 +495,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     while (isVideoLoopRef.current) {
       if (!cameraRef.current) { await new Promise(r => setTimeout(r, 500)); continue; }
       try {
-        const photo = await cameraRef.current.takePictureAsync({ quality: 0.3, base64: true, skipProcessing: true, width: 720 });
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.3, base64: true, skipProcessing: true });
         if (photo?.uri && photo?.base64 && isVideoLoopRef.current) {
           processFrame(photo.uri, photo.base64);
         }
