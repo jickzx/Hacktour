@@ -49,9 +49,8 @@ interface Comment {
 
 const { height: SCREEN_H } = Dimensions.get("window");
 
-// Wake word variants — "zee", "z", "zy", "zed", "hey z", "hey zee"
-// Match "zee", "z", "yo z", "hey z", "zed", "zy", standalone or at start of command
-const WAKE_WORDS = /(?:^|\s)(yo\s+z(?:ee|ed|y)?|hey\s+z(?:ee|ed|y)?|zee|zed|zy|\bz\b)(?:\s|,|$)/i;
+// Wake word variants — "zee", "z", "zy", "zed", "hey z", "hey zee", "ok z", "ok zee", "z vice", "vice z"
+const WAKE_WORDS = /(?:^|\s)(ok\s+z(?:ee|ed|y)?|yo\s+z(?:ee|ed|y)?|hey\s+z(?:ee|ed|y)?|z(?:ee|ed|y)?\s+vice|vice\s+z(?:ee|ed|y)?|zee|zed|zy|\bz\b)(?:\s|,|$)/i;
 
 interface Props {
   onAssistantAction: (action: AssistantAction) => void;
@@ -88,6 +87,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const [activePoll, setActivePoll] = useState<{ question: string; options: string[] } | null>(null);
   const activePollRef = useRef(activePoll);
   const [latestAiComment, setLatestAiComment] = useState<string | undefined>();
+  const [emojiMode, setEmojiMode] = useState(false);
   isLiveRef.current = isLive;
   activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
@@ -169,6 +169,46 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     return () => clearInterval(interval);
   }, [activePoll, pushComment]);
 
+  // ── Hype burst ───────────────────────────────────────────────────────────────
+
+  const triggerHype = useCallback(() => {
+    const HYPE_MSGS = [
+      { user: "hype_man7", text: "LETS GOOO 🔥🔥🔥", avatar: "🔥" },
+      { user: "w_commenter", text: "W streamer W", avatar: "👑" },
+      { user: "chat_rat", text: "POGGERS", avatar: "😤" },
+      { user: "goated_viewer", text: "GOAT fr 🐐", avatar: "🐐" },
+      { user: "xX_fan99", text: "🚀🚀🚀", avatar: "🚀" },
+      { user: "vibes_only", text: "slay bestie!!", avatar: "✨" },
+      { user: "lurker42", text: "actually cracked", avatar: "😱" },
+      { user: "no_cap_bro", text: "no cap this is peak", avatar: "💯" },
+    ];
+    pushCommentsWithDelay(HYPE_MSGS);
+  }, [pushCommentsWithDelay]);
+
+  // ── Shoutout ─────────────────────────────────────────────────────────────────
+
+  const triggerShoutout = useCallback((user: string) => {
+    const msgs = [
+      { user: "⚡ Zee", text: `Big shoutout to @${user}! 🎉`, avatar: "🤖" },
+      { user: "hype_man7", text: `@${user} W!!`, avatar: "🔥" },
+      { user: "chat_rat", text: `lets gooo @${user}`, avatar: "😤" },
+    ];
+    pushCommentsWithDelay(msgs);
+  }, [pushCommentsWithDelay]);
+
+  // ── Countdown ────────────────────────────────────────────────────────────────
+
+  const triggerCountdown = useCallback((seconds: number) => {
+    const secs = Math.min(Math.max(seconds, 3), 10);
+    for (let i = secs; i >= 0; i--) {
+      setTimeout(() => {
+        const text = i === 0 ? "🚀 GO! GO! GO!" : `${i}...`;
+        pushComment({ id: `cd-${Date.now()}-${i}`, user: "⚡ Zee", text, avatar: "⏱", isTranscript: false });
+        setLatestAiComment(text);
+      }, (secs - i) * 1000);
+    }
+  }, [pushComment]);
+
   // ── Assistant: handle pendingAction from App.tsx ─────────────────────────────
 
   useEffect(() => {
@@ -182,6 +222,11 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       case "create_poll":
         if (pendingAction.poll) setActivePoll(pendingAction.poll);
         break;
+      case "close_poll":   setActivePoll(null); break;
+      case "emoji_mode":   setEmojiMode(m => !m); break;
+      case "hype":         triggerHype(); break;
+      case "shoutout":     if (pendingAction.user) triggerShoutout(pendingAction.user); break;
+      case "countdown":    triggerCountdown(pendingAction.seconds ?? 5); break;
     }
     onPendingActionConsumed();
   }, [pendingAction]); // eslint-disable-line
@@ -194,9 +239,11 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
     // Extract everything after the wake word as the command
     const afterWake = fullTranscript.slice(fullTranscript.indexOf(match[0]) + match[0].length).trim();
-    const command = afterWake || "hello";
+    const rawCommand = afterWake || "hello";
+    // In emoji mode, append instruction so Zee replies in emojis
+    const command = emojiMode ? `${rawCommand} (reply using emojis only, no words)` : rawCommand;
 
-    console.log(`[Zee] Wake word detected, command: "${command}"`);
+    console.log(`[Zee] Wake word detected, command: "${rawCommand}"`);
     setAssistantActive(true);
 
     try {
@@ -231,7 +278,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     } finally {
       setAssistantActive(false);
     }
-  }, [pushComment, onAssistantAction]);
+  }, [pushComment, onAssistantAction, emojiMode]);
 
   // ── Poll detection helper (pure, no hooks) ───────────────────────────────────
 
@@ -312,13 +359,14 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       const form = new FormData();
       form.append("video", { uri, name: "chunk.mov", type: "video/quicktime" } as any);
       form.append("context", JSON.stringify(transcriptContextRef.current.slice(-4)));
+      form.append("emojiMode", emojiMode ? "1" : "0");
       const res = await fetch(`${BACKEND_URL}/api/analyse`, { method: "POST", body: form });
       const data = await res.json();
       if (Array.isArray(data.comments)) pushCommentsWithDelay(data.comments);
     } catch (err) {
       console.warn("[Video] Error:", err);
     }
-  }, [pushCommentsWithDelay]);
+  }, [pushCommentsWithDelay, emojiMode]);
 
   const videoLoop = useCallback(async () => {
     while (isVideoLoopRef.current) {
@@ -490,6 +538,13 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
           />
         )}
 
+        {/* Emoji mode banner */}
+        {emojiMode && !assistantActive && (
+          <View style={[styles.statusBanner, styles.emojiBanner]} pointerEvents="none">
+            <Text style={styles.emojiModeText}>🎭 Emoji Mode ON</Text>
+          </View>
+        )}
+
         {/* Zee assistant banner */}
         {assistantActive && (
           <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
@@ -554,6 +609,14 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                   onPress={handleToggleTranscribe}
                 >
                   <Text style={styles.sideBtnIcon}>🗣</Text>
+                </TouchableOpacity>
+              )}
+              {isLive && (
+                <TouchableOpacity
+                  style={[styles.sideBtn, emojiMode && styles.sideBtnPurple]}
+                  onPress={() => setEmojiMode(m => !m)}
+                >
+                  <Text style={styles.sideBtnIcon}>🎭</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -742,6 +805,9 @@ const styles = StyleSheet.create({
   },
   sideBtnRed: { borderColor: COLORS.error, backgroundColor: "rgba(239,68,68,0.25)" },
   sideBtnGreen: { borderColor: COLORS.accent, backgroundColor: `${COLORS.accent}33` },
+  sideBtnPurple: { borderColor: "#a855f7", backgroundColor: "rgba(168,85,247,0.25)" },
+  emojiBanner: { borderColor: "#a855f755", backgroundColor: "rgba(0,0,0,0.7)" },
+  emojiModeText: { fontSize: 13, color: "#a855f7", fontWeight: "700" },
   sideBtnIcon: { fontSize: 20 },
 
   // Chat

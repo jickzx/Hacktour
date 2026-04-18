@@ -107,8 +107,9 @@ app.post("/api/analyse", upload.single("video"), async (req, res) => {
   try {
     context = JSON.parse(req.body.context ?? "[]");
   } catch {}
+  const emojiMode = req.body.emojiMode === "1";
 
-  console.log(`[Analyse] ${(req.file.size / 1024).toFixed(1)}KB, context: ${context.length}`);
+  console.log(`[Analyse] ${(req.file.size / 1024).toFixed(1)}KB, context: ${context.length}, emojiMode: ${emojiMode}`);
 
   try {
     const gemini = getGeminiModel();
@@ -138,6 +139,7 @@ Rules:
 - Mix: hype, questions, jokes, emojis
 - Varied case (caps, lowercase, emoji-only)
 - Realistic usernames (numbers, underscores)
+${emojiMode ? "- EMOJI ONLY MODE: every comment text must be emojis only, no words at all!" : ""}
 
 [{"user":"name","text":"comment","avatar":"emoji"},...]`,
           },
@@ -208,8 +210,7 @@ If absolutely no choice/comparison present, respond with ONLY:
 {"action":{"type":"none"}}`
     : `You are "Zee", a smart voice assistant built into a live streaming app called Stream Mind.
 The app has 3 tabs: home, edit (AI video editor), live (live streaming).
-While live streaming you can: go_live, end_stream, mute, unmute, flip_camera.
-You can also create polls when the streamer mentions a choice between things (e.g. "KFC or McDonald's", "iOS or Android", "cats or dogs").
+While live streaming you can control the stream with the following commands.
 You have a fun, energetic, streamer-friendly personality. Keep responses short (1-2 sentences max).
 
 Always respond with valid JSON only — no markdown:
@@ -217,8 +218,17 @@ Always respond with valid JSON only — no markdown:
 
 Action types:
 - navigate_tab → include "tab":"home"|"edit"|"live"
-- go_live, end_stream, mute, unmute, flip_camera
+- go_live — start the stream
+- end_stream — end the stream
+- mute — mute mic
+- unmute — unmute mic
+- flip_camera — switch front/back camera
 - create_poll → include "poll":{"question":"Which do you prefer?","options":["Option A","Option B"]}
+- close_poll — dismiss the active poll
+- emoji_mode — toggle emoji-only mode (Zee responds in emojis only, chat AI comments go emoji-only)
+- hype — blast a wave of hype messages into chat
+- shoutout → include "user":"<username>" to shout out a viewer (e.g. "z shoutout xX_fan99")
+- countdown → include "seconds":<number> (default 5) to start a countdown in chat
 - none
 
 If you detect the streamer is asking chat to choose between things, use create_poll automatically.
