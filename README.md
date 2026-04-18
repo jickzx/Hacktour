@@ -12,3 +12,5 @@ Core Definition: Use AI to bridge the digital divide and solve real-world proble
 Track 3: The Invisible Tube | AI × Agentic Workflows 
 Today’s apps remain isolated islands. AI should be the connecting layer. London is a global hub, yet people still switch between disjointed tools. This track invites you to build the next invisible operating system. 
 Core Definition: Break down application silos and enable AI to manage end-to-end digital workflows autonomously.
+
+bro really put the tracks
