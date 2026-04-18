@@ -1,12 +1,13 @@
 /**
  * LiveStreamScreen — fullscreen camera, translucent overlay UI.
- * Records audio via expo-av, sends to backend /api/transcribe (Gemini),
+ * Records audio via expo-audio, sends to backend /api/transcribe (Gemini),
  * console.logs the transcript and surfaces it in chat.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Alert,
   Dimensions,
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -24,15 +25,15 @@ import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII, WEIGHTS } from "../constants/theme";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
+import ClipOverlay from "../components/ClipOverlay";
+import { searchClips } from "../services/api";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://100.80.219.114:3001";
 
-// Audio-only transcription chunks (fast)
 const AUDIO_CHUNK_MS = 3000;
-// Video chunks for AI comments (slower, visual context)
-const VIDEO_CHUNK_MS = 5000;
+const FRAME_INTERVAL_MS = 4000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ interface Comment {
   text: string;
   avatar: string;
   isTranscript?: boolean;
+  link?: string;
 }
 
 
@@ -49,8 +51,34 @@ interface Comment {
 
 const { height: SCREEN_H } = Dimensions.get("window");
 
-// Wake word variants — "zee", "z", "zy", "zed", "hey z", "hey zee", "ok z", "ok zee", "z vice", "vice z"
-const WAKE_WORDS = /(?:^|\s)(ok\s+z(?:ee|ed|y)?|yo\s+z(?:ee|ed|y)?|hey\s+z(?:ee|ed|y)?|z(?:ee|ed|y)?\s+vice|vice\s+z(?:ee|ed|y)?|zee|zed|zy|\bz\b)(?:\s|,|$)/i;
+// Wake word variants — "panda", "hey panda", "ok panda", "yo panda", "panda go"
+const WAKE_WORDS = /(?:^|\s)(hey\s+panda|ok\s+panda|yo\s+panda|panda\s+go|panda)(?:\s|,|!|$)/i;
+
+const PANDA_COMMANDS = [
+  { cmd: "hey panda go live", desc: "Start the stream" },
+  { cmd: "hey panda end stream", desc: "End the stream" },
+  { cmd: "hey panda mute", desc: "Mute your mic" },
+  { cmd: "hey panda unmute", desc: "Unmute your mic" },
+  { cmd: "hey panda flip camera", desc: "Switch front/back cam" },
+  { cmd: "hey panda emoji mode", desc: "Toggle emoji-only chat" },
+  { cmd: "hey panda hype", desc: "Blast hype into chat" },
+  { cmd: "hey panda shoutout [user]", desc: "Shout out a viewer" },
+  { cmd: "hey panda countdown 5", desc: "Start a countdown" },
+  { cmd: "hey panda create poll cats or dogs", desc: "Start a chat poll" },
+  { cmd: "hey panda close poll", desc: "Dismiss active poll" },
+  { cmd: "hey panda go to edit", desc: "Navigate to edit tab" },
+  { cmd: "hey panda take my photo", desc: "Start a guided photo shoot" },
+  { cmd: "hey panda what am I wearing", desc: "Identify outfit + shop links" },
+];
+
+// Hard cap on pictures per "take photos of me" request
+const MAX_POSES = 10;
+// How long to wait for the streamer to say "yes/ready" before auto-snapping
+const READY_TIMEOUT_MS = 22000;
+// Phrases that count as "take the shot"
+const READY_RE = /\b(yes|yep|yeah|yup|ready|go|shoot|take it|take the (shot|photo|picture)|do it|i'?m ready|ok|okay|sure)\b/i;
+// Phrases that end the photo session early
+const STOP_RE = /\b(stop|cancel|never\s*mind|no more|abort|that'?s enough|enough|done)\b/i;
 
 interface Props {
   onAssistantAction: (action: AssistantAction) => void;
@@ -88,9 +116,37 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const activePollRef = useRef(activePoll);
   const [latestAiComment, setLatestAiComment] = useState<string | undefined>();
   const [emojiMode, setEmojiMode] = useState(false);
+  const [showCommands, setShowCommands] = useState(false);
+  const [copilot, setCopilot] = useState<{ suggestedReply: string; chatSummary: string; modAlert: string | null } | null>(null);
+  const recentCommentsRef = useRef<string[]>([]);
+  const [photoSession, setPhotoSession] = useState<{
+    pose: string;
+    index: number;
+    total: number;
+    phase: "pose" | "waiting" | "capturing" | "editing" | "done";
+  } | null>(null);
+  const [flashOpacity] = useState(new Animated.Value(0));
+  const photoSessionRef = useRef(false);
+  const readyResolverRef = useRef<((result: "ready" | "stop" | "timeout") => void) | null>(null);
+  const [outfitScanning, setOutfitScanning] = useState(false);
+  const outfitBusyRef = useRef(false);
+  const [activeClip, setActiveClip] = useState<{
+    id: string; title: string; sourceVideoUrl: string; durationSeconds: number; score: number;
+  } | null>(null);
   isLiveRef.current = isLive;
   activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
+
+  useEffect(() => {
+    loadVoiceSettings();
+    const unsub = subscribeVoiceSettings(() => {});
+    return unsub;
+  }, []);
+
+  const speak = useCallback((text: string) => {
+    const v = getVoiceSettings();
+    Speech.speak(text, { language: v.language, rate: v.rate, pitch: v.pitch, voice: v.voiceId });
+  }, []);
 
   const granted = cameraPermission?.granted && micPermission?.granted;
 
@@ -124,6 +180,29 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     return () => clearInterval(t);
   }, [isLive]);
 
+  // ── Copilot insights (runs every 12s while live) ──────────────────────────────
+
+  useEffect(() => {
+    if (!isLive) { setCopilot(null); return; }
+    const fetchCopilot = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/copilot`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: recentCommentsRef.current.slice(-20),
+            transcript: transcriptContextRef.current,
+          }),
+        });
+        const data = await res.json();
+        if (data.suggestedReply || data.chatSummary) setCopilot(data);
+      } catch {}
+    };
+    fetchCopilot();
+    const t = setInterval(fetchCopilot, 12_000);
+    return () => clearInterval(t);
+  }, [isLive]);
+
   // ── Comments ─────────────────────────────────────────────────────────────────
 
   const pushComment = useCallback((c: Comment) => {
@@ -139,6 +218,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       setTimeout(() => {
         pushComment({ id: `ai-${Date.now()}-${i}-${Math.random().toString(36).slice(2)}`, ...c });
         setLatestAiComment(c.text);
+        recentCommentsRef.current = [...recentCommentsRef.current.slice(-40), `${c.user}: ${c.text}`];
       }, i * (400 + Math.random() * 300));
     });
   }, [pushComment]);
@@ -189,7 +269,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
   const triggerShoutout = useCallback((user: string) => {
     const msgs = [
-      { user: "⚡ Zee", text: `Big shoutout to @${user}! 🎉`, avatar: "🤖" },
+      { user: "🐼 Panda", text: `Big shoutout to @${user}! 🎉`, avatar: "🐼" },
       { user: "hype_man7", text: `@${user} W!!`, avatar: "🔥" },
       { user: "chat_rat", text: `lets gooo @${user}`, avatar: "😤" },
     ];
@@ -203,9 +283,36 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     for (let i = secs; i >= 0; i--) {
       setTimeout(() => {
         const text = i === 0 ? "🚀 GO! GO! GO!" : `${i}...`;
-        pushComment({ id: `cd-${Date.now()}-${i}`, user: "⚡ Zee", text, avatar: "⏱", isTranscript: false });
+        pushComment({ id: `cd-${Date.now()}-${i}`, user: "🐼 Panda", text, avatar: "⏱", isTranscript: false });
         setLatestAiComment(text);
       }, (secs - i) * 1000);
+    }
+  }, [pushComment]);
+
+  // ── Pull up clip: vector search the clip library ────────────────────────────
+
+  const handlePullUpClip = useCallback(async (query: string) => {
+    console.log(`[ClipOverlay] Searching for: "${query}"`);
+    pushComment({ id: `zee-clip-${Date.now()}`, user: "⚡ Zee", text: `🔍 Searching clips for "${query}"…`, avatar: "🤖" });
+
+    try {
+      const results = await searchClips(query, 1);
+      if (!results || results.length === 0) {
+        pushComment({ id: `zee-clip-miss-${Date.now()}`, user: "⚡ Zee", text: "Couldn't find a matching clip 😅", avatar: "🤖" });
+        return;
+      }
+      const best = results[0];
+      console.log(`[ClipOverlay] Best match: "${best.title}" (score: ${best.score.toFixed(3)})`);
+      setActiveClip({
+        id: best.id,
+        title: best.title,
+        sourceVideoUrl: best.sourceVideoUrl ?? "",
+        durationSeconds: best.durationSeconds,
+        score: best.score,
+      });
+    } catch (err) {
+      console.warn("[ClipOverlay] Search error:", err);
+      pushComment({ id: `zee-clip-err-${Date.now()}`, user: "⚡ Zee", text: "Clip search failed — try again!", avatar: "🤖" });
     }
   }, [pushComment]);
 
@@ -227,6 +334,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       case "hype":         triggerHype(); break;
       case "shoutout":     if (pendingAction.user) triggerShoutout(pendingAction.user); break;
       case "countdown":    triggerCountdown(pendingAction.seconds ?? 5); break;
+      case "pull_up_clip": if (pendingAction.query) handlePullUpClip(pendingAction.query); break;
     }
     onPendingActionConsumed();
   }, [pendingAction]); // eslint-disable-line
@@ -243,7 +351,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     // In emoji mode, append instruction so Zee replies in emojis
     const command = emojiMode ? `${rawCommand} (reply using emojis only, no words)` : rawCommand;
 
-    console.log(`[Zee] Wake word detected, command: "${rawCommand}"`);
+    console.log(`[Panda] Wake word detected, command: "${rawCommand}"`);
     setAssistantActive(true);
 
     try {
@@ -253,17 +361,15 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         body: JSON.stringify({ command, context: transcriptContextRef.current }),
       });
       const data = await res.json();
-      console.log(`[Zee] Response: "${data.response}", Action:`, data.action);
+      console.log(`[Panda] Response: "${data.response}", Action:`, data.action);
 
       // Speak the response
-      if (data.response) {
-        Speech.speak(data.response, { language: "en", rate: 1.1, pitch: 1.0 });
-      }
+      if (data.response) speak(data.response);
 
       // Show as a special comment
       pushComment({
         id: `zee-${Date.now()}`,
-        user: "⚡ Zee",
+        user: "🐼 Panda",
         text: data.response ?? "...",
         avatar: "🤖",
         isTranscript: false,
@@ -274,31 +380,38 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         onAssistantAction(data.action as AssistantAction);
       }
     } catch (err) {
-      console.warn("[Zee] Error:", err);
+      console.warn("[Panda] Error:", err);
     } finally {
       setAssistantActive(false);
     }
   }, [pushComment, onAssistantAction, emojiMode]);
 
-  // ── Poll detection helper (pure, no hooks) ───────────────────────────────────
+  // ── Poll detection via Gemini function calling ────────────────────────────────
+  // Cooldown: don't allow a new poll within 25s of the last one firing
+  const lastPollTimeRef = useRef(0);
 
-  const detectPoll = (transcript: string): { question: string; options: [string, string] } | null => {
-    const orMatch = transcript.match(/\b([\w\s']+?)\s+or\s+([\w\s']+?)(?:\?|,|\.|$)/i);
-    if (!orMatch) return null;
-    const clean = (s: string) => s
-      .replace(/^(who('?s)?\s+(gonna|going to)\s+win[,\s]*)/i, "")
-      .replace(/\b(tonight|today|right now|chat|guys)\b.*$/i, "")
-      .replace(/^(the\s+streamer\s+(asks?|says)[,\s"]*)/i, "")
-      .trim();
-    const a = clean(orMatch[1]);
-    const b = clean(orMatch[2]);
-    if (a.split(" ").length <= 4 && b.split(" ").length <= 4 && a.length > 1 && b.length > 1) {
-      const qMatch = transcript.match(/"([^"]+)"/);
-      const question = qMatch ? qMatch[1] : `${a} or ${b}?`;
-      return { question, options: [a, b] };
+  const detectPoll = useCallback(async (transcript: string) => {
+    if (activePollRef.current) return;
+    const now = Date.now();
+    if (now - lastPollTimeRef.current < 25_000) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/detect-poll`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript }),
+      });
+      const data = await res.json();
+      if (data.poll) {
+        lastPollTimeRef.current = now;
+        console.log(`[Poll] "${data.poll.options[0]}" vs "${data.poll.options[1]}"`);
+        setActivePoll(data.poll);
+        // Auto-close after 10s
+        setTimeout(() => setActivePoll(null), 10_000);
+      }
+    } catch (err) {
+      console.warn("[Poll] Error:", err);
     }
-    return null;
-  };
+  }, []);
 
   // ── Fast audio-only transcription loop ───────────────────────────────────────
 
@@ -315,15 +428,23 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       pushComment({ id: `transcript-${Date.now()}`, user: "🎙 you (live)", text: transcript, avatar: "🎤", isTranscript: true });
       transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
 
+      // During a photo session, listen for "ready" / "stop" and swallow everything else
+      if (photoSessionRef.current && readyResolverRef.current) {
+        if (STOP_RE.test(transcript)) {
+          const r = readyResolverRef.current; readyResolverRef.current = null; r("stop");
+          return;
+        }
+        if (READY_RE.test(transcript)) {
+          const r = readyResolverRef.current; readyResolverRef.current = null; r("ready");
+          return;
+        }
+        // Don't trigger assistant / polls while we're shooting — just absorb
+        return;
+      }
+
       if (WAKE_WORDS.test(transcript)) { triggerAssistant(transcript); return; }
 
-      if (!activePollRef.current) {
-        const poll = detectPoll(transcript);
-        if (poll) {
-          console.log(`[Poll] Detected: "${poll.options[0]}" vs "${poll.options[1]}"`);
-          setActivePoll(poll);
-        }
-      }
+      detectPoll(transcript);
     } catch (err) {
       console.warn("[Audio] Error:", err);
     }
@@ -354,35 +475,35 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
   // ── Slow video loop for AI comments ──────────────────────────────────────────
 
-  const processVideoChunk = useCallback(async (uri: string) => {
+  const processFrame = useCallback(async (uri: string, base64: string) => {
     try {
       const form = new FormData();
-      form.append("video", { uri, name: "chunk.mov", type: "video/quicktime" } as any);
+      form.append("frame", { uri, name: "frame.jpg", type: "image/jpeg" } as any);
+      form.append("base64", base64);
       form.append("context", JSON.stringify(transcriptContextRef.current.slice(-4)));
       form.append("emojiMode", emojiMode ? "1" : "0");
       const res = await fetch(`${BACKEND_URL}/api/analyse`, { method: "POST", body: form });
       const data = await res.json();
       if (Array.isArray(data.comments)) pushCommentsWithDelay(data.comments);
     } catch (err) {
-      console.warn("[Video] Error:", err);
+      console.warn("[Frame] Error:", err);
     }
   }, [pushCommentsWithDelay, emojiMode]);
 
   const videoLoop = useCallback(async () => {
     while (isVideoLoopRef.current) {
-      if (!cameraRef.current || isRecordingRef.current) { await new Promise(r => setTimeout(r, 500)); continue; }
+      if (!cameraRef.current) { await new Promise(r => setTimeout(r, 500)); continue; }
       try {
-        isRecordingRef.current = true;
-        const video = await cameraRef.current.recordAsync({ maxDuration: VIDEO_CHUNK_MS / 1000 });
-        isRecordingRef.current = false;
-        if (video?.uri && isVideoLoopRef.current) processVideoChunk(video.uri);
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.3, base64: true, skipProcessing: true, width: 720 });
+        if (photo?.uri && photo?.base64 && isVideoLoopRef.current) {
+          processFrame(photo.uri, photo.base64);
+        }
       } catch (err) {
-        isRecordingRef.current = false;
-        console.warn("[Video loop] Error:", err);
-        await new Promise(r => setTimeout(r, 500));
+        console.warn("[Frame loop] Error:", err);
       }
+      await new Promise(r => setTimeout(r, FRAME_INTERVAL_MS));
     }
-  }, [processVideoChunk]);
+  }, [processFrame]);
 
   const stopRecording = useCallback(async () => {
     isAudioLoopRef.current = false;
@@ -399,6 +520,201 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     setTranscribeStatus("");
     console.log("[Recording] Stopped.");
   }, []);
+
+  // ── Photo session: Gemini guides streamer through poses ──────────────────────
+
+  const waitForReady = useCallback((timeoutMs: number) =>
+    new Promise<"ready" | "stop" | "timeout">((resolve) => {
+      readyResolverRef.current = resolve;
+      setTimeout(() => {
+        if (readyResolverRef.current === resolve) {
+          readyResolverRef.current = null;
+          resolve("timeout");
+        }
+      }, timeoutMs);
+    }), []);
+
+  const startPhotoSession = useCallback(async (rawPoses: string[]) => {
+    if (photoSessionRef.current) return;
+    const poses = rawPoses.slice(0, MAX_POSES);
+    photoSessionRef.current = true;
+    console.log(`[Photos] Session starting — ${poses.length} poses (max ${MAX_POSES})`);
+
+    // Pause the analyse video loop so we can use takePictureAsync
+    const wasVideoLooping = isVideoLoopRef.current;
+    isVideoLoopRef.current = false;
+    if (isRecordingRef.current && cameraRef.current) {
+      try { cameraRef.current.stopRecording(); } catch {}
+    }
+    // Let camera switch from video→picture mode
+    await new Promise((r) => setTimeout(r, 600));
+
+    const sessionId = `session-${Date.now()}`;
+    const savedOriginals: { id: string; pose: string }[] = [];
+    let stoppedEarly = false;
+
+    for (let i = 0; i < poses.length; i++) {
+      if (!photoSessionRef.current) break;
+      const pose = poses[i];
+
+      // 1. Announce pose + ask for confirmation
+      setPhotoSession({ pose, index: i, total: poses.length, phase: "pose" });
+      const firstLine = i === 0
+        ? `Pose ${i + 1}: ${pose}. Say "ready" when you want me to snap it.`
+        : `Nice! Now: ${pose}. Say "ready" when you're set.`;
+      speak(firstLine);
+      pushComment({
+        id: `pose-${Date.now()}-${i}`,
+        user: "📸 Gemini",
+        text: `Pose ${i + 1}/${poses.length}: ${pose} — say "ready"`,
+        avatar: "✨",
+      });
+
+      // 2. Wait for the streamer to say "yes"/"ready" (or "stop")
+      setPhotoSession({ pose, index: i, total: poses.length, phase: "waiting" });
+      const result = await waitForReady(READY_TIMEOUT_MS);
+      if (!photoSessionRef.current) break;
+      if (result === "stop") {
+        speak("No worries, stopping the shoot.");
+        pushComment({ id: `pose-stop-${Date.now()}`, user: "📸 Gemini", text: "stopped by streamer", avatar: "✨" });
+        stoppedEarly = true;
+        break;
+      }
+      if (result === "timeout") {
+        speak("Alright, taking it anyway — say cheese!");
+      } else {
+        speak("Got it!");
+      }
+
+      // 3. Capture + flash
+      setPhotoSession({ pose, index: i, total: poses.length, phase: "capturing" });
+      await new Promise((r) => setTimeout(r, 550));
+      try {
+        const pic = await cameraRef.current?.takePictureAsync({ quality: 0.85, skipProcessing: true });
+        Animated.sequence([
+          Animated.timing(flashOpacity, { toValue: 0.9, duration: 80, useNativeDriver: true }),
+          Animated.timing(flashOpacity, { toValue: 0, duration: 260, useNativeDriver: true }),
+        ]).start();
+        if (pic?.uri) {
+          const saved = await uploadPhoto({ uri: pic.uri, caption: pose, sessionId });
+          savedOriginals.push({ id: saved.id, pose });
+        }
+      } catch (err) {
+        console.warn("[Photos] Capture error:", err);
+      }
+      // Small breathing room before the next prompt
+      await new Promise((r) => setTimeout(r, 600));
+    }
+
+    // 4. Edit pass (Nano Banana 2) — run them in parallel, keep UI in "editing" phase
+    if (savedOriginals.length > 0 && photoSessionRef.current && !stoppedEarly) {
+      setPhotoSession({
+        pose: "making them cinematic…",
+        index: 0,
+        total: savedOriginals.length,
+        phase: "editing",
+      });
+      speak(`Got ${savedOriginals.length} shots. Making them cinematic, one sec.`);
+      pushComment({
+        id: `edit-start-${Date.now()}`,
+        user: "📸 Gemini",
+        text: `Editing ${savedOriginals.length} photos…`,
+        avatar: "✨",
+      });
+      let completed = 0;
+      await Promise.all(savedOriginals.map((p) =>
+        editPhoto(p.id)
+          .then(() => {
+            completed += 1;
+            setPhotoSession({
+              pose: `edit ${completed}/${savedOriginals.length}`,
+              index: completed,
+              total: savedOriginals.length,
+              phase: "editing",
+            });
+          })
+          .catch((e) => console.warn("[Photos] Edit failed:", e))
+      ));
+    } else if (savedOriginals.length === 0 && !stoppedEarly) {
+      speak("Didn't get any shots that time.");
+    }
+
+    // 5. Wrap up
+    const total = savedOriginals.length;
+    if (total > 0) {
+      speak(`Done! Your ${total} original shots and cinematic edits are in the library.`);
+      pushComment({
+        id: `pose-done-${Date.now()}`,
+        user: "📸 Gemini",
+        text: `Saved ${total} originals + ${total} cinematic edits`,
+        avatar: "✨",
+      });
+    }
+    setPhotoSession(null);
+    photoSessionRef.current = false;
+    readyResolverRef.current = null;
+
+    if (wasVideoLooping && isLiveRef.current && isTranscribingRef.current) {
+      isVideoLoopRef.current = true;
+      videoLoop();
+    }
+  }, [speak, pushComment, flashOpacity, waitForReady]); // eslint-disable-line
+
+  // ── Outfit scan: capture a frame and post shopping links to chat ─────────────
+
+  const scanOutfit = useCallback(async () => {
+    if (outfitBusyRef.current || photoSessionRef.current) return;
+    outfitBusyRef.current = true;
+    setOutfitScanning(true);
+    console.log("[Outfit] Scanning…");
+
+    // Pause video loop so takePictureAsync works
+    const wasVideoLooping = isVideoLoopRef.current;
+    isVideoLoopRef.current = false;
+    if (isRecordingRef.current && cameraRef.current) {
+      try { cameraRef.current.stopRecording(); } catch {}
+    }
+    await new Promise((r) => setTimeout(r, 500));
+
+    try {
+      const pic = await cameraRef.current?.takePictureAsync({ quality: 0.7, skipProcessing: true });
+      if (!pic?.uri) throw new Error("no camera frame");
+
+      const items: OutfitItem[] = await identifyOutfit(pic.uri);
+
+      if (!items.length) {
+        speak("Hmm, I can't see any clothes clearly. Try stepping back?");
+        pushComment({ id: `fit-empty-${Date.now()}`, user: "👗 Gemini", text: "Can't see the fit clearly — try stepping back", avatar: "✨" });
+      } else {
+        const intro = items.length === 1
+          ? `Spotted your ${items[0].label.toLowerCase()}. Dropping a link in chat.`
+          : `Spotted ${items.length} pieces. Dropping links in chat.`;
+        speak(intro);
+        pushComment({ id: `fit-head-${Date.now()}`, user: "👗 Gemini", text: intro, avatar: "✨" });
+        items.forEach((item, i) => {
+          setTimeout(() => {
+            pushComment({
+              id: `fit-${Date.now()}-${i}`,
+              user: "👗 Gemini",
+              text: `${item.label} → tap to shop`,
+              avatar: "🛍",
+              link: item.searchUrl,
+            });
+          }, 350 + i * 450);
+        });
+      }
+    } catch (err) {
+      console.warn("[Outfit] Error:", err);
+      pushComment({ id: `fit-err-${Date.now()}`, user: "👗 Gemini", text: "Outfit scan failed — try again", avatar: "✨" });
+    } finally {
+      setOutfitScanning(false);
+      outfitBusyRef.current = false;
+      if (wasVideoLooping && isLiveRef.current && isTranscribingRef.current) {
+        isVideoLoopRef.current = true;
+        videoLoop();
+      }
+    }
+  }, [speak, pushComment]); // eslint-disable-line
 
   useEffect(() => {
     if (isTranscribing && isLive) {
@@ -473,7 +789,12 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     >
       {/* ── LAYER 1: Fullscreen camera ── */}
       {granted && !isCamOff ? (
-        <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing={facing} mode="video" />
+        <CameraView
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          facing={facing}
+          mode={photoSession ? "picture" : "video"}
+        />
       ) : (
         <View style={[StyleSheet.absoluteFill, styles.camFallback]}>
           {!granted ? (
@@ -538,6 +859,14 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
           />
         )}
 
+        {/* Clip overlay */}
+        {activeClip && (
+          <ClipOverlay
+            clip={activeClip}
+            onClose={() => setActiveClip(null)}
+          />
+        )}
+
         {/* Emoji mode banner */}
         {emojiMode && !assistantActive && (
           <View style={[styles.statusBanner, styles.emojiBanner]} pointerEvents="none">
@@ -545,12 +874,41 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
           </View>
         )}
 
-        {/* Zee assistant banner */}
+        {/* Assistant banner */}
         {assistantActive && (
           <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
-            <Text style={styles.zeeText}>⚡ Zee is thinking…</Text>
+            <Text style={styles.zeeText}>🐼 Panda is thinking…</Text>
           </View>
         )}
+
+        {/* Outfit scan banner */}
+        {outfitScanning && (
+          <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
+            <Text style={styles.zeeText}>👗 Gemini is scanning your fit…</Text>
+          </View>
+        )}
+
+        {/* Photo session popup */}
+        {photoSession && (
+          <View style={styles.photoBackdrop} pointerEvents="none">
+            <View style={styles.photoCard}>
+              <Text style={styles.photoStep}>
+                {photoSession.phase === "editing"
+                  ? `✨ EDITING ${photoSession.index}/${photoSession.total}`
+                  : `📸 ${Math.min(photoSession.index + 1, photoSession.total)} / ${photoSession.total}`}
+              </Text>
+              <Text style={styles.photoPose}>{photoSession.pose}</Text>
+              <Text style={styles.photoHint}>
+                {photoSession.phase === "pose"     && "listen for the cue…"}
+                {photoSession.phase === "waiting"  && "say “ready” when you’re in position"}
+                {photoSession.phase === "capturing" && "snap!"}
+                {photoSession.phase === "editing"  && "running Nano Banana 2…"}
+                {photoSession.phase === "done"     && "all done"}
+              </Text>
+            </View>
+          </View>
+        )}
+        <Animated.View pointerEvents="none" style={[styles.flash, { opacity: flashOpacity }]} />
 
         {/* Transcribe status banner */}
         {!assistantActive && (isTranscribing || transcribeStatus.length > 0) && (
@@ -619,6 +977,12 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                   <Text style={styles.sideBtnIcon}>EMO</Text>
                 </TouchableOpacity>
               )}
+              <TouchableOpacity
+                style={[styles.sideBtn, showCommands && styles.sideBtnActive]}
+                onPress={() => setShowCommands(v => !v)}
+              >
+                <Text style={styles.sideBtnIcon}>🐼</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -630,18 +994,11 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                 style={styles.chatScroll}
                 contentContainerStyle={styles.chatContent}
                 showsVerticalScrollIndicator={false}
-                pointerEvents="none"
+                pointerEvents="box-none"
               >
-                {comments.map((c) => (
-                  <View
-                    key={c.id}
-                    style={[
-                      styles.chatRow,
-                      c.isTranscript && styles.chatRowTranscript,
-                    ]}
-                  >
-                    <Text style={styles.chatAvatar}>{c.avatar}</Text>
-                    <View style={styles.chatBubble}>
+                {comments.map((c) => {
+                  const bubble = (
+                    <View style={[styles.chatBubble, c.link && styles.chatBubbleLink]}>
                       <Text style={[
                         styles.chatUser,
                         c.isTranscript && styles.chatUserTranscript,
@@ -649,10 +1006,27 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                       ]}>
                         {c.user}
                       </Text>
-                      <Text style={styles.chatMsg}>{c.text}</Text>
+                      <Text style={[styles.chatMsg, c.link && styles.chatMsgLink]}>{c.text}</Text>
                     </View>
-                  </View>
-                ))}
+                  );
+                  return (
+                    <View
+                      key={c.id}
+                      style={[
+                        styles.chatRow,
+                        c.isTranscript && styles.chatRowTranscript,
+                      ]}
+                      pointerEvents={c.link ? "box-none" : "none"}
+                    >
+                      <Text style={styles.chatAvatar}>{c.avatar}</Text>
+                      {c.link ? (
+                        <TouchableOpacity activeOpacity={0.8} onPress={() => Linking.openURL(c.link!)}>
+                          {bubble}
+                        </TouchableOpacity>
+                      ) : bubble}
+                    </View>
+                  );
+                })}
               </ScrollView>
 
               <View style={styles.chatInputRow}>
@@ -689,6 +1063,27 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
             </TouchableOpacity>
           )}
         </View>
+
+        {/* Commands sheet */}
+        {showCommands && (
+          <View style={styles.commandsSheet}>
+            <View style={styles.commandsHeader}>
+              <Text style={styles.commandsTitle}>🐼 Panda Commands</Text>
+              <TouchableOpacity onPress={() => setShowCommands(false)}>
+                <Text style={styles.commandsClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.commandsScroll} showsVerticalScrollIndicator={false}>
+              {PANDA_COMMANDS.map((item, i) => (
+                <View key={i} style={styles.commandRow}>
+                  <Text style={styles.commandCmd}>{item.cmd}</Text>
+                  <Text style={styles.commandDesc}>{item.desc}</Text>
+                </View>
+              ))}
+              <View style={{ height: 12 }} />
+            </ScrollView>
+          </View>
+        )}
       </View>
     </KeyboardAvoidingView>
   );
@@ -774,6 +1169,114 @@ const styles = StyleSheet.create({
   zeeBanner: { borderColor: "#facc1555", backgroundColor: "rgba(0,0,0,0.7)" },
   zeeText: { fontSize: 13, color: "#facc15", fontWeight: "700" },
 
+  // Copilot panel
+  copilotPanel: {
+    marginHorizontal: SPACING.md,
+    marginTop: SPACING.xs,
+    backgroundColor: "rgba(0,0,0,0.72)",
+    borderRadius: RADII.md,
+    borderWidth: 1,
+    borderColor: "rgba(99,102,241,0.4)",
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+    gap: 4,
+  },
+  copilotRow: { flexDirection: "row", alignItems: "flex-start", gap: 6 },
+  copilotLabel: { fontSize: 11, fontWeight: "800", color: "#a5b4fc", minWidth: 36 },
+  copilotText: { fontSize: 11, color: "rgba(255,255,255,0.8)", flex: 1, lineHeight: 15 },
+  copilotSuggest: { color: "#c4b5fd", fontStyle: "italic" },
+  copilotAlertText: { fontSize: 11, color: "#f87171", flex: 1, lineHeight: 15 },
+
+  // Commands sheet
+  commandsSheet: {
+    position: "absolute",
+    bottom: 100,
+    right: 60,
+    width: 280,
+    backgroundColor: "rgba(10,10,20,0.95)",
+    borderRadius: RADII.lg,
+    borderWidth: 1,
+    borderColor: "rgba(99,102,241,0.5)",
+    overflow: "hidden",
+    maxHeight: SCREEN_H * 0.55,
+  },
+  commandsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    backgroundColor: "rgba(99,102,241,0.2)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(99,102,241,0.3)",
+  },
+  commandsTitle: { fontSize: 13, fontWeight: "800", color: "#a5b4fc" },
+  commandsClose: { fontSize: 16, color: "rgba(255,255,255,0.5)", fontWeight: "700" },
+  commandsScroll: { paddingHorizontal: SPACING.md, paddingTop: SPACING.xs },
+  commandRow: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.06)",
+  },
+  commandCmd: { fontSize: 12, fontWeight: "700", color: "#c4b5fd", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  commandDesc: { fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 2 },
+
+  // Photo session popup
+  photoBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: SPACING.xl,
+  },
+  photoCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "rgba(15,15,25,0.92)",
+    borderRadius: RADII.xl,
+    paddingVertical: SPACING.xl,
+    paddingHorizontal: SPACING.lg,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: COLORS.primaryLight,
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+  },
+  photoStep: {
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 2,
+    color: "#fff",
+    backgroundColor: "rgba(124,58,237,0.85)",
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 5,
+    borderRadius: RADII.full,
+    overflow: "hidden",
+  },
+  photoPose: {
+    fontSize: 28,
+    fontWeight: "900",
+    color: "#fff",
+    textAlign: "center",
+    marginTop: SPACING.md,
+    textShadowColor: "rgba(0,0,0,0.85)",
+    textShadowRadius: 10,
+    textShadowOffset: { width: 0, height: 2 },
+  },
+  photoHint: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.75)",
+    marginTop: SPACING.sm,
+    fontStyle: "italic",
+  },
+  flash: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#fff",
+  },
+
   // Permission
   permCenter: {
     position: "absolute", top: "35%", left: 0, right: 0,
@@ -806,6 +1309,7 @@ const styles = StyleSheet.create({
   sideBtnRed: { borderColor: COLORS.error, backgroundColor: "rgba(239,68,68,0.25)" },
   sideBtnGreen: { borderColor: COLORS.accent, backgroundColor: `${COLORS.accent}33` },
   sideBtnPurple: { borderColor: "#a855f7", backgroundColor: "rgba(168,85,247,0.25)" },
+  sideBtnActive: { borderColor: "#34d399", backgroundColor: "rgba(52,211,153,0.2)" },
   emojiBanner: { borderColor: "#a855f755", backgroundColor: "rgba(0,0,0,0.7)" },
   emojiModeText: { fontSize: 13, color: "#a855f7", fontWeight: "700" },
   sideBtnIcon: { fontSize: 11, fontWeight: "700", color: "#FFFFFF", letterSpacing: 0.5 },
@@ -828,6 +1332,8 @@ const styles = StyleSheet.create({
   chatUserSelf: { color: COLORS.accent },
   chatUserTranscript: { color: "#facc15" },
   chatMsg: { fontSize: 13, color: "rgba(255,255,255,0.92)", lineHeight: 17 },
+  chatBubbleLink: { borderColor: COLORS.accent, backgroundColor: "rgba(6,214,160,0.15)" },
+  chatMsgLink: { color: COLORS.accent, textDecorationLine: "underline", fontWeight: "700" },
   chatInputRow: { flexDirection: "row", gap: SPACING.sm, alignItems: "center" },
   chatInput: {
     flex: 1, height: 40, borderRadius: RADII.full,

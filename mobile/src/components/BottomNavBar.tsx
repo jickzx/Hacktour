@@ -5,7 +5,7 @@
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { COLORS, RADII, SPACING, WEIGHTS } from "../constants/theme";
 
-export type Tab = "home" | "library" | "edit" | "live";
+export type Tab = "home" | "library" | "edit" | "live" | "settings";
 
 interface BottomNavBarProps {
   activeTab: Tab;

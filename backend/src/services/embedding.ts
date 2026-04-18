@@ -11,8 +11,8 @@ const EMBEDDING_API_URL =
  * Returns a 768-dimensional float vector.
  */
 export async function embedText(text: string): Promise<number[]> {
-  const apiKey = process.env.GOOGLE_EMBEDDING_API_KEY;
-  if (!apiKey) throw new Error("GOOGLE_EMBEDDING_API_KEY not set in environment");
+  const apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_EMBEDDING_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set in environment");
 
   const res = await fetch(`${EMBEDDING_API_URL}?key=${apiKey}`, {
     method: "POST",

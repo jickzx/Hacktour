@@ -15,7 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { Video, ResizeMode } from "expo-av";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
@@ -312,15 +312,16 @@ function CompositionCard({
   previewUri: string | null;
 }) {
   const totalSecs = Math.round(composition.totalDurationFrames / composition.fps);
+  const player = useVideoPlayer(previewUri);
+
   return (
     <View style={styles.resultWrap}>
       {previewUri && (
-        <Video
-          source={{ uri: previewUri }}
+        <VideoView
+          player={player}
           style={styles.videoPreview}
-          resizeMode={ResizeMode.CONTAIN}
-          useNativeControls
-          shouldPlay={false}
+          contentFit="contain"
+          nativeControls
         />
       )}
       <LinearGradient colors={[COLORS.surface, COLORS.surfaceLight]} style={styles.resultCard}>
