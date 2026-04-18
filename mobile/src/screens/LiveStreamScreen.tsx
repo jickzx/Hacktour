@@ -541,7 +541,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         {/* Emoji mode banner */}
         {emojiMode && !assistantActive && (
           <View style={[styles.statusBanner, styles.emojiBanner]} pointerEvents="none">
-            <Text style={styles.emojiModeText}>🎭 Emoji Mode ON</Text>
+            <Text style={styles.emojiModeText}>EMO MODE ON</Text>
           </View>
         )}
 
@@ -589,26 +589,26 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                 style={[styles.sideBtn, isMuted && styles.sideBtnRed]}
                 onPress={() => setIsMuted((m) => !m)}
               >
-                <Text style={styles.sideBtnIcon}>{isMuted ? "🔇" : "🎙"}</Text>
+                <Text style={styles.sideBtnIcon}>{isMuted ? "MUTE" : "MIC"}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.sideBtn, isCamOff && styles.sideBtnRed]}
                 onPress={() => setIsCamOff((c) => !c)}
               >
-                <Text style={styles.sideBtnIcon}>{isCamOff ? "📷" : "📸"}</Text>
+                <Text style={styles.sideBtnIcon}>{isCamOff ? "CAM OFF" : "CAM"}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.sideBtn}
                 onPress={() => setFacing((f) => f === "front" ? "back" : "front")}
               >
-                <Text style={styles.sideBtnIcon}>🔄</Text>
+                <Text style={styles.sideBtnIcon}>FLIP</Text>
               </TouchableOpacity>
               {isLive && (
                 <TouchableOpacity
                   style={[styles.sideBtn, isTranscribing && styles.sideBtnGreen]}
                   onPress={handleToggleTranscribe}
                 >
-                  <Text style={styles.sideBtnIcon}>🗣</Text>
+                  <Text style={styles.sideBtnIcon}>AI</Text>
                 </TouchableOpacity>
               )}
               {isLive && (
@@ -616,7 +616,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                   style={[styles.sideBtn, emojiMode && styles.sideBtnPurple]}
                   onPress={() => setEmojiMode(m => !m)}
                 >
-                  <Text style={styles.sideBtnIcon}>🎭</Text>
+                  <Text style={styles.sideBtnIcon}>EMO</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -808,7 +808,7 @@ const styles = StyleSheet.create({
   sideBtnPurple: { borderColor: "#a855f7", backgroundColor: "rgba(168,85,247,0.25)" },
   emojiBanner: { borderColor: "#a855f755", backgroundColor: "rgba(0,0,0,0.7)" },
   emojiModeText: { fontSize: 13, color: "#a855f7", fontWeight: "700" },
-  sideBtnIcon: { fontSize: 20 },
+  sideBtnIcon: { fontSize: 11, fontWeight: "700", color: "#FFFFFF", letterSpacing: 0.5 },
 
   // Chat
   chatPanel: { flex: 1, maxHeight: SCREEN_H * 0.42, gap: SPACING.sm },
