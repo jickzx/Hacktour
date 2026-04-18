@@ -14,6 +14,7 @@ import editRouter from "./routes/edit";
 import clipsRouter from "./routes/clips";
 import processRouter from "./routes/process";
 import youtubeRouter from "./routes/youtube";
+import feedRouter from "./routes/feed";
 import photosRouter from "./routes/photos";
 
 const app = express();
@@ -34,6 +35,7 @@ app.use("/api", clipsRouter);
 app.use("/api", processRouter);
 app.use("/api", youtubeRouter);
 app.use("/api", photosRouter);
+app.use("/api", feedRouter);
 
 function getGemini() {
   if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
