@@ -398,9 +398,7 @@ function PostCard({ post }: { post: Post }) {
         )}
       </View>
 
-      {(!post.imageSource || post.isClip) && (
-        <Text style={styles.cardTitle} numberOfLines={2}>{post.title}</Text>
-      )}
+      <Text style={styles.cardTitle} numberOfLines={2}>{post.title}</Text>
       <View style={styles.cardMeta}>
         <View style={[styles.avatar, post.isClip && styles.avatarClip]} />
         <Text style={styles.cardAuthor} numberOfLines={1}>{post.author}</Text>
