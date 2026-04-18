@@ -15,6 +15,7 @@ import OpenAI from "openai";
 import editRouter from "./routes/edit";
 import clipsRouter from "./routes/clips";
 import processRouter from "./routes/process";
+import feedRouter from "./routes/feed";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -34,6 +35,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api", editRouter);
 app.use("/api", clipsRouter);
 app.use("/api", processRouter);
+app.use("/api", feedRouter);
 
 /** Creates a Gemini client only when the key is configured. */
 function getGeminiModel() {

@@ -91,3 +91,15 @@ export async function searchClips(query: string, limit = 10) {
   if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
   return data.results;
 }
+
+/** Fetches AI-generated XHS-style trending Chinese feed posts */
+export async function fetchFeed(): Promise<{
+  id: string; title: string; author: string; likes: number;
+  ratio: number; tintA: string; tintB: string;
+  isVideo?: boolean; isLive?: boolean; tag?: string;
+}[]> {
+  const res = await fetch(`${API_BASE}/api/feed`);
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
+  return data.posts;
+}
