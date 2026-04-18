@@ -1,8 +1,8 @@
 /**
  * Root App component — sets up navigation and providers
  */
-import HomeScreen from "./src/screens/HomeScreen";
+import AIEditScreen from "./src/screens/AIEditScreen";
 
 export default function App() {
-  return <HomeScreen />;
+  return <AIEditScreen />;
 }
