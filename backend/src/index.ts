@@ -18,28 +18,41 @@ import clipsRouter from "./routes/clips";
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Gemini — video+audio transcription
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const gemini = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
-
-// z.ai GLM — comment/reaction generation
-const zai = new OpenAI({
-  apiKey: process.env.ZAI_API_KEY!,
-  baseURL: process.env.ZAI_BASE_URL!,
-});
 const ZAI_MODEL = process.env.ZAI_MODEL ?? "glm-4.6v";
 const ZAI_MODEL_CHAT = process.env.ZAI_MODEL_CHAT ?? "glm-5-turbo";
-
 const upload = multer({ dest: "/tmp/hacktour-uploads/" });
 
 app.use(cors());
+app.use(express.json({ limit: "2mb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.use("/api", express.json({ limit: "1mb" }), editRouter);
-app.use("/api", express.json({ limit: "1mb" }), clipsRouter);
+app.use("/api", editRouter);
+app.use("/api", clipsRouter);
+
+/** Creates a Gemini client only when the key is configured. */
+function getGeminiModel() {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error("Missing GEMINI_API_KEY");
+  }
+
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  return genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
+}
+
+/** Creates a z.ai client only when the key is configured. */
+function getZaiClient() {
+  if (!process.env.ZAI_API_KEY || !process.env.ZAI_BASE_URL) {
+    throw new Error("Missing ZAI_API_KEY or ZAI_BASE_URL");
+  }
+
+  return new OpenAI({
+    apiKey: process.env.ZAI_API_KEY,
+    baseURL: process.env.ZAI_BASE_URL,
+  });
+}
 
 /**
  * POST /api/transcribe
@@ -47,10 +60,16 @@ app.use("/api", express.json({ limit: "1mb" }), clipsRouter);
  * Returns: { transcript: string }
  */
 app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
-  if (!req.file) { res.status(400).json({ error: "No audio file" }); return; }
+  if (!req.file) {
+    res.status(400).json({ error: "No audio file" });
+    return;
+  }
+
   const filePath = req.file.path;
   console.log(`[Transcribe] ${(req.file.size / 1024).toFixed(1)}KB`);
+
   try {
+    const gemini = getGeminiModel();
     const base64 = fs.readFileSync(filePath).toString("base64");
     const result = await gemini.generateContent([
       { inlineData: { mimeType: "audio/m4a", data: base64 } },
@@ -63,7 +82,9 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
     console.error("[Transcribe] Error:", err);
     res.status(500).json({ error: "Transcription failed", detail: String(err) });
   } finally {
-    try { fs.unlinkSync(filePath); } catch {}
+    try {
+      fs.unlinkSync(filePath);
+    } catch {}
   }
 });
 
@@ -80,19 +101,22 @@ app.post("/api/analyse", upload.single("video"), async (req, res) => {
 
   const filePath = req.file.path;
   let context: string[] = [];
-  try { context = JSON.parse(req.body.context ?? "[]"); } catch {}
+  try {
+    context = JSON.parse(req.body.context ?? "[]");
+  } catch {}
 
   console.log(`[Analyse] ${(req.file.size / 1024).toFixed(1)}KB, context: ${context.length}`);
 
   try {
-    // ── Steps 1 & 2 in parallel: Gemini transcribes, GLM pre-warms on context ──
+    const gemini = getGeminiModel();
+    const zai = getZaiClient();
     const base64 = fs.readFileSync(filePath).toString("base64");
     const recentContext = context.join(" ... ");
 
     const [txResult, preReactResult] = await Promise.all([
       gemini.generateContent([
         { inlineData: { mimeType: "video/quicktime", data: base64 } },
-        `Transcribe EXACTLY what the person is saying in this video clip. verbatim speech only — no descriptions, no labels, no context. If nothing is said, return empty string.`,
+        "Transcribe EXACTLY what the person is saying in this video clip. verbatim speech only — no descriptions, no labels, no context. If nothing is said, return empty string.",
       ]),
       zai.chat.completions.create({
         model: ZAI_MODEL,
@@ -123,19 +147,23 @@ Rules:
     console.log(`[Transcript] ${transcript}`);
 
     const reactRaw = preReactResult.choices[0].message.content ?? "";
-    // Extract JSON array — find first [ ... ] block regardless of markdown wrapping
     const arrMatch = reactRaw.match(/\[[\s\S]*\]/);
     let comments: unknown[] = [];
-    try { comments = JSON.parse(arrMatch?.[0] ?? "[]"); } catch { console.warn("[React] JSON parse failed:", reactRaw.slice(0, 200)); }
+    try {
+      comments = JSON.parse(arrMatch?.[0] ?? "[]");
+    } catch {
+      console.warn("[React] JSON parse failed:", reactRaw.slice(0, 200));
+    }
 
     console.log(`[React] ${comments.length} comments via z.ai`);
     res.json({ transcript, comments });
-
   } catch (err) {
     console.error("[Analyse] Error:", err);
     res.status(500).json({ error: "Analysis failed", detail: String(err) });
   } finally {
-    try { fs.unlinkSync(filePath); } catch {}
+    try {
+      fs.unlinkSync(filePath);
+    } catch {}
   }
 });
 
@@ -143,12 +171,13 @@ Rules:
  * POST /api/assistant
  * Body: { command: string, context: string[] }
  * Returns: { response: string, action?: { type: string, [key: string]: any } }
- *
- * action types: navigate_tab (tab: home|edit|live), go_live, end_stream,
- *               mute, unmute, flip_camera, none
  */
 app.post("/api/assistant", express.json(), async (req, res) => {
-  const { command, context = [], pollOnly = false } = req.body as { command?: string; context?: string[]; pollOnly?: boolean };
+  const { command, context = [], pollOnly = false } = req.body as {
+    command?: string;
+    context?: string[];
+    pollOnly?: boolean;
+  };
 
   if (!command?.trim()) {
     res.status(400).json({ error: "Missing command" });
@@ -157,7 +186,6 @@ app.post("/api/assistant", express.json(), async (req, res) => {
 
   console.log(`[Assistant] Command: "${command}"${pollOnly ? " (pollOnly)" : ""}`);
 
-  // pollOnly: just detect poll intent, return immediately if none
   const systemPrompt = pollOnly
     ? `You are a poll detector. Your ONLY job is to find "X or Y" choices in streamer speech.
 
@@ -194,6 +222,7 @@ If you detect the streamer is asking chat to choose between things, use create_p
 If no action needed use {"type":"none"}.`;
 
   try {
+    const zai = getZaiClient();
     const result = await zai.chat.completions.create({
       model: ZAI_MODEL_CHAT,
       temperature: pollOnly ? 0 : 0.8,
@@ -202,10 +231,14 @@ If no action needed use {"type":"none"}.`;
           role: "system",
           content: systemPrompt,
         },
-        ...(!pollOnly && context.length ? [{
-          role: "user" as const,
-          content: `Recent stream context: ${context.slice(-3).join(" | ")}`,
-        }] : []),
+        ...(!pollOnly && context.length
+          ? [
+              {
+                role: "user" as const,
+                content: `Recent stream context: ${context.slice(-3).join(" | ")}`,
+              },
+            ]
+          : []),
         {
           role: "user",
           content: command,
@@ -215,19 +248,24 @@ If no action needed use {"type":"none"}.`;
 
     const assistRaw = result.choices[0].message.content ?? "";
     const objMatch = assistRaw.match(/\{[\s\S]*\}/);
-    let parsed: { response: string; action?: Record<string, unknown> } = { response: "Got it!", action: { type: "none" } };
-    try { parsed = JSON.parse(objMatch?.[0] ?? "{}"); } catch { console.warn("[Assistant] JSON parse failed:", assistRaw.slice(0, 200)); }
+    let parsed: { response: string; action?: Record<string, unknown> } = {
+      response: "Got it!",
+      action: { type: "none" },
+    };
+    try {
+      parsed = JSON.parse(objMatch?.[0] ?? "{}");
+    } catch {
+      console.warn("[Assistant] JSON parse failed:", assistRaw.slice(0, 200));
+    }
 
     console.log(`[Assistant] Response: "${parsed.response}", Action: ${JSON.stringify(parsed.action)}`);
     res.json(parsed);
-
   } catch (err) {
     console.error("[Assistant] Error:", err);
     res.status(500).json({ error: "Assistant failed", detail: String(err) });
   }
 });
 
-// ── WebSocket proxy → Gemini Live API ────────────────────────────────────────
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/live" });
 
@@ -241,7 +279,6 @@ wss.on("connection", (client) => {
   const queue: string[] = [];
 
   geminiWs.on("open", () => {
-    // Send setup message
     const setup = {
       setup: {
         model: "models/gemini-live-2.5-flash",
@@ -263,14 +300,12 @@ wss.on("connection", (client) => {
     if (msg.setupComplete) {
       console.log("[Live] Gemini setup complete");
       ready = true;
-      // Flush queued audio
-      queue.forEach(m => geminiWs.send(m));
+      queue.forEach((m) => geminiWs.send(m));
       queue.length = 0;
       client.send(JSON.stringify({ type: "ready" }));
       return;
     }
 
-    // Forward input transcription to client
     if (msg.inputTranscription?.text) {
       client.send(JSON.stringify({ type: "transcript", text: msg.inputTranscription.text }));
     }
@@ -283,10 +318,11 @@ wss.on("connection", (client) => {
 
   geminiWs.on("close", () => {
     console.log("[Live] Gemini WS closed");
-    if (client.readyState === WebSocket.OPEN) client.close();
+    if (client.readyState === WebSocket.OPEN) {
+      client.close();
+    }
   });
 
-  // Forward audio from client → Gemini
   client.on("message", (data) => {
     const msg = JSON.parse(data.toString()) as { audio: string };
     const payload = JSON.stringify({
@@ -303,7 +339,9 @@ wss.on("connection", (client) => {
 
   client.on("close", () => {
     console.log("[Live] Client disconnected");
-    if (geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
+    if (geminiWs.readyState === WebSocket.OPEN) {
+      geminiWs.close();
+    }
   });
 });
 

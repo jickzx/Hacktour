@@ -1,6 +1,6 @@
 /**
- * Edit route — accepts prompt + clips, returns a Remotion composition via GLM 5.1
- * Auto-saves successful edits to the clip library
+ * Edit route — accepts prompt + clips with thumbnails, generates a Remotion composition,
+ * and auto-saves successful edits to the clip library.
  */
 import { Router } from "express";
 import { generateComposition } from "../services/glm";
@@ -23,9 +23,11 @@ router.post<{},{}, EditRequest>("/edit", async (req, res) => {
   }
 
   try {
+    console.log(`Processing edit: ${clips.length} clips, prompt: "${prompt.slice(0, 50)}..."`);
+
     const composition = await generateComposition({ prompt, clips });
 
-    // Auto-save to library — embedding failure must NOT block the edit response
+    // Auto-save to library — embedding failure must NOT block the edit response.
     let clipId: string | undefined;
     try {
       const embedding = await embedText(prompt);
@@ -38,6 +40,7 @@ router.post<{},{}, EditRequest>("/edit", async (req, res) => {
       console.warn("[Edit] Library save skipped:", embedErr.message);
     }
 
+    console.log(`Composition generated: ${composition.clips.length} clips, ${composition.overlays.length} overlays`);
     res.json({ success: true, composition, clipId } as EditResponse);
   } catch (err: any) {
     console.error("Edit generation failed:", err.message);

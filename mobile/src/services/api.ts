@@ -1,6 +1,10 @@
 /** API service for communicating with the Stream Mind backend */
+import { Platform } from "react-native";
 
-const API_BASE = "http://localhost:3001";
+const API_BASE =
+  Platform.OS === "web"
+    ? "http://localhost:3001"
+    : "http://10.231.110.105:3001";
 
 export async function fetchHealth() {
   const res = await fetch(`${API_BASE}/api/health`);
@@ -8,16 +12,20 @@ export async function fetchHealth() {
   return res.json();
 }
 
-/** Sends clips and prompt to the AI edit endpoint */
+/** Sends clips with thumbnails and prompt to the AI edit endpoint */
 export async function generateEdit(
   prompt: string,
-  clips: { name: string; duration: number }[]
+  clips: { name: string; duration: number; thumbnail?: string }[]
 ) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 65000);
+
   const res = await fetch(`${API_BASE}/api/edit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt, clips }),
-  });
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
 
   const data = await res.json();
   if (!res.ok || !data.success) {

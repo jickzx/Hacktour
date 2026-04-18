@@ -50,7 +50,7 @@ export interface RemotionComposition {
 /** Request body sent from the mobile app */
 export interface EditRequest {
   prompt: string;
-  clips: { name: string; duration: number }[];
+  clips: { name: string; duration: number; thumbnail?: string }[];
 }
 
 /** Response returned to the mobile app */
