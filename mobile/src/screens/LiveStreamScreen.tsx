@@ -26,8 +26,8 @@ import { COLORS, SPACING, RADII, WEIGHTS } from "../constants/theme";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
-import { searchClips } from "../services/api";
-import { loadVoiceSettings, subscribeVoiceSettings } from "../services/voiceSettings";
+import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem } from "../services/api";
+import { getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings } from "../services/voiceSettings";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
