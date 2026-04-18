@@ -1,6 +1,6 @@
 /**
  * LiveStreamScreen — fullscreen camera, translucent overlay UI.
- * Records audio via expo-av, sends to backend /api/transcribe (Gemini),
+ * Records audio via expo-audio, sends to backend /api/transcribe (Gemini),
  * console.logs the transcript and surfaces it in chat.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
