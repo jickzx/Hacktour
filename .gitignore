@@ -1,5 +1,6 @@
 .DS_Store
 github-accounts.json
+.env
 
 node_modules/
 dist/
