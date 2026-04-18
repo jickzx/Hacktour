@@ -7,6 +7,7 @@ import { StatusBar } from "expo-status-bar";
 import AIEditScreen from "./src/screens/AIEditScreen";
 import LiveStreamScreen from "./src/screens/LiveStreamScreen";
 import HomeScreen from "./src/screens/HomeScreen";
+import LibraryScreen from "./src/screens/LibraryScreen";
 import BottomNavBar, { Tab } from "./src/components/BottomNavBar";
 import { COLORS } from "./src/constants/theme";
 
@@ -26,6 +27,9 @@ export default function App() {
       </View>
       <View style={[styles.screen, activeTab !== "live" && styles.hidden]}>
         <LiveStreamScreen />
+      </View>
+      <View style={[styles.screen, activeTab !== "library" && styles.hidden]}>
+        <LibraryScreen />
       </View>
 
       <BottomNavBar activeTab={activeTab} onTabPress={setActiveTab} />

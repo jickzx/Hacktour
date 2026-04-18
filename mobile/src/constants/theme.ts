@@ -17,6 +17,7 @@ export const COLORS = {
   uploadBg: "#12121A",
   gradientStart: "#7C3AED",
   gradientEnd: "#06D6A0",
+  white: "#FFFFFF",
 };
 
 export const SPACING = {

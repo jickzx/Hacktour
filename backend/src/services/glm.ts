@@ -1,9 +1,8 @@
 /**
- * GLM 5.1 API client — sends prompts to ZhipuAI and returns Remotion compositions
+ * GLM composition generator — uses z.ai (OpenAI-compatible) via ZAI_* env vars
  */
+import OpenAI from "openai";
 import type { RemotionComposition, EditRequest } from "../types/remotion";
-
-const GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 
 /** System prompt that instructs GLM to output valid Remotion JSON */
 const SYSTEM_PROMPT = `You are a video editing AI that outputs Remotion compositions as JSON.
@@ -30,39 +29,28 @@ Rules:
 - Return ONLY the JSON object, no markdown fences, no explanation
 - Be creative with transitions and effects based on the user's prompt`;
 
-/** Calls GLM 5.1 with the edit request and returns a parsed Remotion composition */
+/** Calls z.ai GLM with the edit request and returns a parsed Remotion composition */
 export async function generateComposition(
   request: EditRequest
 ): Promise<RemotionComposition> {
-  const apiKey = process.env.GLM_API_KEY;
-  if (!apiKey) throw new Error("GLM_API_KEY not set in environment");
+  const client = new OpenAI({
+    apiKey: process.env.ZAI_API_KEY,
+    baseURL: process.env.ZAI_BASE_URL,
+  });
 
   const userMessage = `Clips:\n${request.clips.map((c) => `- ${c.name} (${c.duration}s)`).join("\n")}\n\nEdit instructions: ${request.prompt}`;
 
-  const res = await fetch(GLM_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "glm-5.1",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userMessage },
-      ],
-      temperature: 0.7,
-      max_tokens: 2048,
-    }),
+  const response = await client.chat.completions.create({
+    model: process.env.ZAI_MODEL ?? "glm-4.6v",
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userMessage },
+    ],
+    temperature: 0.7,
+    max_tokens: 2048,
   });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`GLM API error ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json();
-  const rawContent: string = data.choices?.[0]?.message?.content ?? "";
+  const rawContent: string = response.choices?.[0]?.message?.content ?? "";
 
   // Strip markdown code fences if present
   const jsonStr = rawContent
