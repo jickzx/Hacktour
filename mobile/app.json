@@ -35,7 +35,8 @@
       "apiBaseUrl": "http://localhost:3001"
     },
     "plugins": [
-      "expo-audio"
+      "expo-audio",
+      "expo-video"
     ]
   }
 }
