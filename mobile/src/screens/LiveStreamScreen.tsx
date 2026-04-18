@@ -47,8 +47,23 @@ interface Comment {
 
 const { height: SCREEN_H } = Dimensions.get("window");
 
-// Wake word variants — "zee", "z", "zy", "zed", "hey z", "hey zee", "ok z", "ok zee", "z vice", "vice z"
-const WAKE_WORDS = /(?:^|\s)(ok\s+z(?:ee|ed|y)?|yo\s+z(?:ee|ed|y)?|hey\s+z(?:ee|ed|y)?|z(?:ee|ed|y)?\s+vice|vice\s+z(?:ee|ed|y)?|zee|zed|zy|\bz\b)(?:\s|,|$)/i;
+// Wake word variants — "panda", "hey panda", "ok panda", "yo panda", "panda go"
+const WAKE_WORDS = /(?:^|\s)(hey\s+panda|ok\s+panda|yo\s+panda|panda\s+go|panda)(?:\s|,|!|$)/i;
+
+const PANDA_COMMANDS = [
+  { cmd: "hey panda go live", desc: "Start the stream" },
+  { cmd: "hey panda end stream", desc: "End the stream" },
+  { cmd: "hey panda mute", desc: "Mute your mic" },
+  { cmd: "hey panda unmute", desc: "Unmute your mic" },
+  { cmd: "hey panda flip camera", desc: "Switch front/back cam" },
+  { cmd: "hey panda emoji mode", desc: "Toggle emoji-only chat" },
+  { cmd: "hey panda hype", desc: "Blast hype into chat" },
+  { cmd: "hey panda shoutout [user]", desc: "Shout out a viewer" },
+  { cmd: "hey panda countdown 5", desc: "Start a countdown" },
+  { cmd: "hey panda create poll cats or dogs", desc: "Start a chat poll" },
+  { cmd: "hey panda close poll", desc: "Dismiss active poll" },
+  { cmd: "hey panda go to edit", desc: "Navigate to edit tab" },
+];
 
 interface Props {
   onAssistantAction: (action: AssistantAction) => void;
@@ -86,6 +101,9 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const activePollRef = useRef(activePoll);
   const [latestAiComment, setLatestAiComment] = useState<string | undefined>();
   const [emojiMode, setEmojiMode] = useState(false);
+  const [showCommands, setShowCommands] = useState(false);
+  const [copilot, setCopilot] = useState<{ suggestedReply: string; chatSummary: string; modAlert: string | null } | null>(null);
+  const recentCommentsRef = useRef<string[]>([]);
   isLiveRef.current = isLive;
   activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
@@ -122,6 +140,29 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     return () => clearInterval(t);
   }, [isLive]);
 
+  // ── Copilot insights (runs every 12s while live) ──────────────────────────────
+
+  useEffect(() => {
+    if (!isLive) { setCopilot(null); return; }
+    const fetchCopilot = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/copilot`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: recentCommentsRef.current.slice(-20),
+            transcript: transcriptContextRef.current,
+          }),
+        });
+        const data = await res.json();
+        if (data.suggestedReply || data.chatSummary) setCopilot(data);
+      } catch {}
+    };
+    fetchCopilot();
+    const t = setInterval(fetchCopilot, 12_000);
+    return () => clearInterval(t);
+  }, [isLive]);
+
   // ── Comments ─────────────────────────────────────────────────────────────────
 
   const pushComment = useCallback((c: Comment) => {
@@ -137,6 +178,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       setTimeout(() => {
         pushComment({ id: `ai-${Date.now()}-${i}-${Math.random().toString(36).slice(2)}`, ...c });
         setLatestAiComment(c.text);
+        recentCommentsRef.current = [...recentCommentsRef.current.slice(-40), `${c.user}: ${c.text}`];
       }, i * (400 + Math.random() * 300));
     });
   }, [pushComment]);
@@ -187,7 +229,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
   const triggerShoutout = useCallback((user: string) => {
     const msgs = [
-      { user: "⚡ Zee", text: `Big shoutout to @${user}! 🎉`, avatar: "🤖" },
+      { user: "🐼 Panda", text: `Big shoutout to @${user}! 🎉`, avatar: "🐼" },
       { user: "hype_man7", text: `@${user} W!!`, avatar: "🔥" },
       { user: "chat_rat", text: `lets gooo @${user}`, avatar: "😤" },
     ];
@@ -201,7 +243,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     for (let i = secs; i >= 0; i--) {
       setTimeout(() => {
         const text = i === 0 ? "🚀 GO! GO! GO!" : `${i}...`;
-        pushComment({ id: `cd-${Date.now()}-${i}`, user: "⚡ Zee", text, avatar: "⏱", isTranscript: false });
+        pushComment({ id: `cd-${Date.now()}-${i}`, user: "🐼 Panda", text, avatar: "⏱", isTranscript: false });
         setLatestAiComment(text);
       }, (secs - i) * 1000);
     }
@@ -241,7 +283,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     // In emoji mode, append instruction so Zee replies in emojis
     const command = emojiMode ? `${rawCommand} (reply using emojis only, no words)` : rawCommand;
 
-    console.log(`[Zee] Wake word detected, command: "${rawCommand}"`);
+    console.log(`[Panda] Wake word detected, command: "${rawCommand}"`);
     setAssistantActive(true);
 
     try {
@@ -251,7 +293,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         body: JSON.stringify({ command, context: transcriptContextRef.current }),
       });
       const data = await res.json();
-      console.log(`[Zee] Response: "${data.response}", Action:`, data.action);
+      console.log(`[Panda] Response: "${data.response}", Action:`, data.action);
 
       // Speak the response
       if (data.response) {
@@ -261,7 +303,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       // Show as a special comment
       pushComment({
         id: `zee-${Date.now()}`,
-        user: "⚡ Zee",
+        user: "🐼 Panda",
         text: data.response ?? "...",
         avatar: "🤖",
         isTranscript: false,
@@ -272,32 +314,38 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         onAssistantAction(data.action as AssistantAction);
       }
     } catch (err) {
-      console.warn("[Zee] Error:", err);
+      console.warn("[Panda] Error:", err);
     } finally {
       setAssistantActive(false);
     }
   }, [pushComment, onAssistantAction, emojiMode]);
 
-  // ── Poll detection helper (pure, no hooks) ───────────────────────────────────
+  // ── Poll detection via Gemini function calling ────────────────────────────────
+  // Cooldown: don't allow a new poll within 25s of the last one firing
+  const lastPollTimeRef = useRef(0);
 
-  const detectPoll = (transcript: string): { question: string; options: [string, string] } | null => {
-    // Match "X or Y" — allow apostrophes, hyphens, letters, spaces
-    const orMatch = transcript.match(/([\w\s'\-.]+?)\s+or\s+([\w\s'\-.]+?)(?:\?|,|\.|!|$)/i);
-    if (!orMatch) return null;
-    const clean = (s: string) => s
-      .replace(/^(are\s+we\s+going\s+to|going\s+to|we\s+going|gonna\s+go\s+to)\s+/i, "")
-      .replace(/^(who('?s)?\s+(gonna|going to)\s+win[,\s]*)/i, "")
-      .replace(/\b(tonight|today|right now|chat|guys)\b.*$/i, "")
-      .replace(/^(the\s+streamer\s+(asks?|says)[,\s"]*)/i, "")
-      .trim();
-    const a = clean(orMatch[1]);
-    const b = clean(orMatch[2]);
-    if (a.split(" ").length <= 5 && b.split(" ").length <= 5 && a.length > 1 && b.length > 1) {
-      const question = `${a} or ${b}?`;
-      return { question, options: [a, b] };
+  const detectPoll = useCallback(async (transcript: string) => {
+    if (activePollRef.current) return;
+    const now = Date.now();
+    if (now - lastPollTimeRef.current < 25_000) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/detect-poll`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript }),
+      });
+      const data = await res.json();
+      if (data.poll) {
+        lastPollTimeRef.current = now;
+        console.log(`[Poll] "${data.poll.options[0]}" vs "${data.poll.options[1]}"`);
+        setActivePoll(data.poll);
+        // Auto-close after 10s
+        setTimeout(() => setActivePoll(null), 10_000);
+      }
+    } catch (err) {
+      console.warn("[Poll] Error:", err);
     }
-    return null;
-  };
+  }, []);
 
   // ── Fast audio-only transcription loop ───────────────────────────────────────
 
@@ -316,13 +364,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
       if (WAKE_WORDS.test(transcript)) { triggerAssistant(transcript); return; }
 
-      if (!activePollRef.current) {
-        const poll = detectPoll(transcript);
-        if (poll) {
-          console.log(`[Poll] Detected: "${poll.options[0]}" vs "${poll.options[1]}"`);
-          setActivePoll(poll);
-        }
-      }
+      detectPoll(transcript);
     } catch (err) {
       console.warn("[Audio] Error:", err);
     }
@@ -537,6 +579,30 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
           />
         )}
 
+        {/* Copilot insights panel */}
+        {isLive && copilot && !assistantActive && (
+          <View style={styles.copilotPanel} pointerEvents="none">
+            {copilot.modAlert && (
+              <View style={styles.copilotRow}>
+                <Text style={styles.copilotLabel}>⚠️ MOD</Text>
+                <Text style={styles.copilotAlertText} numberOfLines={2}>{copilot.modAlert}</Text>
+              </View>
+            )}
+            {copilot.chatSummary ? (
+              <View style={styles.copilotRow}>
+                <Text style={styles.copilotLabel}>💬</Text>
+                <Text style={styles.copilotText} numberOfLines={2}>{copilot.chatSummary}</Text>
+              </View>
+            ) : null}
+            {copilot.suggestedReply ? (
+              <View style={styles.copilotRow}>
+                <Text style={styles.copilotLabel}>🐼</Text>
+                <Text style={[styles.copilotText, styles.copilotSuggest]} numberOfLines={2}>{copilot.suggestedReply}</Text>
+              </View>
+            ) : null}
+          </View>
+        )}
+
         {/* Emoji mode banner */}
         {emojiMode && !assistantActive && (
           <View style={[styles.statusBanner, styles.emojiBanner]} pointerEvents="none">
@@ -547,7 +613,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         {/* Zee assistant banner */}
         {assistantActive && (
           <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
-            <Text style={styles.zeeText}>⚡ Zee is thinking…</Text>
+            <Text style={styles.zeeText}>🐼 Panda is thinking…</Text>
           </View>
         )}
 
@@ -618,6 +684,12 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                   <Text style={styles.sideBtnIcon}>🎭</Text>
                 </TouchableOpacity>
               )}
+              <TouchableOpacity
+                style={[styles.sideBtn, showCommands && styles.sideBtnActive]}
+                onPress={() => setShowCommands(v => !v)}
+              >
+                <Text style={styles.sideBtnIcon}>🐼</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -688,6 +760,27 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
             </TouchableOpacity>
           )}
         </View>
+
+        {/* Commands sheet */}
+        {showCommands && (
+          <View style={styles.commandsSheet}>
+            <View style={styles.commandsHeader}>
+              <Text style={styles.commandsTitle}>🐼 Panda Commands</Text>
+              <TouchableOpacity onPress={() => setShowCommands(false)}>
+                <Text style={styles.commandsClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.commandsScroll} showsVerticalScrollIndicator={false}>
+              {PANDA_COMMANDS.map((item, i) => (
+                <View key={i} style={styles.commandRow}>
+                  <Text style={styles.commandCmd}>{item.cmd}</Text>
+                  <Text style={styles.commandDesc}>{item.desc}</Text>
+                </View>
+              ))}
+              <View style={{ height: 12 }} />
+            </ScrollView>
+          </View>
+        )}
       </View>
     </KeyboardAvoidingView>
   );
@@ -773,6 +866,58 @@ const styles = StyleSheet.create({
   zeeBanner: { borderColor: "#facc1555", backgroundColor: "rgba(0,0,0,0.7)" },
   zeeText: { fontSize: 13, color: "#facc15", fontWeight: "700" },
 
+  // Copilot panel
+  copilotPanel: {
+    marginHorizontal: SPACING.md,
+    marginTop: SPACING.xs,
+    backgroundColor: "rgba(0,0,0,0.72)",
+    borderRadius: RADII.md,
+    borderWidth: 1,
+    borderColor: "rgba(99,102,241,0.4)",
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+    gap: 4,
+  },
+  copilotRow: { flexDirection: "row", alignItems: "flex-start", gap: 6 },
+  copilotLabel: { fontSize: 11, fontWeight: "800", color: "#a5b4fc", minWidth: 36 },
+  copilotText: { fontSize: 11, color: "rgba(255,255,255,0.8)", flex: 1, lineHeight: 15 },
+  copilotSuggest: { color: "#c4b5fd", fontStyle: "italic" },
+  copilotAlertText: { fontSize: 11, color: "#f87171", flex: 1, lineHeight: 15 },
+
+  // Commands sheet
+  commandsSheet: {
+    position: "absolute",
+    bottom: 100,
+    right: 60,
+    width: 280,
+    backgroundColor: "rgba(10,10,20,0.95)",
+    borderRadius: RADII.lg,
+    borderWidth: 1,
+    borderColor: "rgba(99,102,241,0.5)",
+    overflow: "hidden",
+    maxHeight: SCREEN_H * 0.55,
+  },
+  commandsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    backgroundColor: "rgba(99,102,241,0.2)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(99,102,241,0.3)",
+  },
+  commandsTitle: { fontSize: 13, fontWeight: "800", color: "#a5b4fc" },
+  commandsClose: { fontSize: 16, color: "rgba(255,255,255,0.5)", fontWeight: "700" },
+  commandsScroll: { paddingHorizontal: SPACING.md, paddingTop: SPACING.xs },
+  commandRow: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.06)",
+  },
+  commandCmd: { fontSize: 12, fontWeight: "700", color: "#c4b5fd", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  commandDesc: { fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 2 },
+
   // Permission
   permCenter: {
     position: "absolute", top: "35%", left: 0, right: 0,
@@ -805,6 +950,7 @@ const styles = StyleSheet.create({
   sideBtnRed: { borderColor: COLORS.error, backgroundColor: "rgba(239,68,68,0.25)" },
   sideBtnGreen: { borderColor: COLORS.accent, backgroundColor: `${COLORS.accent}33` },
   sideBtnPurple: { borderColor: "#a855f7", backgroundColor: "rgba(168,85,247,0.25)" },
+  sideBtnActive: { borderColor: "#34d399", backgroundColor: "rgba(52,211,153,0.2)" },
   emojiBanner: { borderColor: "#a855f755", backgroundColor: "rgba(0,0,0,0.7)" },
   emojiModeText: { fontSize: 13, color: "#a855f7", fontWeight: "700" },
   sideBtnIcon: { fontSize: 20 },
