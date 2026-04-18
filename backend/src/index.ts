@@ -14,6 +14,7 @@ import editRouter from "./routes/edit";
 import clipsRouter from "./routes/clips";
 import processRouter from "./routes/process";
 import youtubeRouter from "./routes/youtube";
+import photosRouter from "./routes/photos";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -32,6 +33,7 @@ app.use("/api", editRouter);
 app.use("/api", clipsRouter);
 app.use("/api", processRouter);
 app.use("/api", youtubeRouter);
+app.use("/api", photosRouter);
 
 function getGemini() {
   if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
@@ -147,6 +149,60 @@ Rules:
 });
 
 /**
+ * POST /api/outfit
+ * multipart/form-data: { photo: .jpg }
+ * Returns: { items: Array<{ label: string, description: string, searchUrl: string }> }
+ * Uses Gemini vision to identify clothing items and returns Google Shopping search links.
+ */
+app.post("/api/outfit", upload.single("photo"), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "No photo uploaded" });
+    return;
+  }
+
+  const filePath = req.file.path;
+  console.log(`[Outfit] ${(req.file.size / 1024).toFixed(1)}KB`);
+
+  try {
+    const base64 = fs.readFileSync(filePath).toString("base64");
+    const mimeType = req.file.mimetype || "image/jpeg";
+
+    const result = await getGemini().generateContent([
+      { inlineData: { mimeType, data: base64 } },
+      `Identify each distinct clothing, footwear, or accessory item the person in this image is wearing.
+Return ONLY a JSON array, no markdown. Max 5 items, most prominent first.
+Each item must be a short, specific shopping query (2-6 words) including colour + type + notable detail.
+
+Format: [{"label":"short name","query":"specific search phrase"}]
+Example: [{"label":"Black hoodie","query":"black oversized zip-up hoodie"},{"label":"White sneakers","query":"white chunky low-top sneakers"}]
+
+If no person or clothing is visible, return [].`,
+    ]);
+
+    const raw = result.response.text();
+    const arrMatch = raw.match(/\[[\s\S]*\]/);
+    let parsed: { label: string; query: string }[] = [];
+    try { parsed = JSON.parse(arrMatch?.[0] ?? "[]"); } catch {
+      console.warn("[Outfit] JSON parse failed:", raw.slice(0, 200));
+    }
+
+    const items = parsed.slice(0, 5).map((it) => ({
+      label: String(it.label ?? it.query ?? "item").slice(0, 40),
+      query: String(it.query ?? it.label ?? "").slice(0, 80),
+      searchUrl: `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(String(it.query ?? it.label ?? ""))}`,
+    }));
+
+    console.log(`[Outfit] ${items.length} items`);
+    res.json({ success: true, items });
+  } catch (err) {
+    console.error("[Outfit] Error:", err);
+    res.status(500).json({ success: false, error: String(err) });
+  } finally {
+    try { fs.unlinkSync(filePath); } catch {}
+  }
+});
+
+/**
  * POST /api/assistant
  * Body: { command: string, context: string[] }
  * Returns: { response: string, action?: { type: string, [key: string]: any } }
@@ -182,16 +238,18 @@ If poll detected, respond with ONLY this exact JSON (no markdown, no extra text)
 
 If absolutely no choice/comparison present, respond with ONLY:
 {"action":{"type":"none"}}`
-    : `You are "Zee", a smart voice assistant built into a live streaming app called Stream Mind.
-The app has 3 tabs: home, edit (AI video editor), live (live streaming).
-While live streaming you can control the stream with the following commands.
+    : `You are a smart voice assistant built into a live streaming app called Stream Mind. You answer to both the names "Zee" and "Gemini".
+The app has 4 tabs: home, edit (AI video editor), live (live streaming), library.
+While live streaming you can control the stream with the commands listed below.
+You can also create polls when the streamer mentions a choice between things (e.g. "KFC or McDonald's", "iOS or Android", "cats or dogs").
+You can take a photo shoot of the streamer when they ask you to take pictures of them — you'll guide them through poses and the app will capture each one.
 You have a fun, energetic, streamer-friendly personality. Keep responses short (1-2 sentences max).
 
 Always respond with valid JSON only — no markdown:
 {"response":"what you say back","action":{"type":"action_type"}}
 
 Action types:
-- navigate_tab → include "tab":"home"|"edit"|"live"
+- navigate_tab → include "tab":"home"|"edit"|"live"|"library"
 - go_live — start the stream
 - end_stream — end the stream
 - mute — mute mic
@@ -203,8 +261,12 @@ Action types:
 - hype — blast a wave of hype messages into chat
 - shoutout → include "user":"<username>" to shout out a viewer (e.g. "z shoutout xX_fan99")
 - countdown → include "seconds":<number> (default 5) to start a countdown in chat
+- take_photos → include "photos":{"poses":["pose 1 instruction","pose 2 instruction","pose 3 instruction","pose 4 instruction"]}
+- identify_outfit → no extra fields; the app will capture a frame of the streamer and post shopping links in chat
 - none
 
+If the streamer says anything like "take pictures of me", "take my photo", "photo shoot", "snap me", use take_photos with 3-5 fun, short pose instructions (e.g. "big smile", "look over your shoulder", "peace sign", "candid laugh").
+If the streamer says anything like "what am I wearing", "rate my fit", "find my outfit", "where can I buy this", "link my clothes", "what's this shirt", use identify_outfit.
 If you detect the streamer is asking chat to choose between things, use create_poll automatically.
 If no action needed use {"type":"none"}.`;
 

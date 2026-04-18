@@ -5,13 +5,14 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, RADII } from "../constants/theme";
 
-export type Tab = "edit" | "live" | "home" | "library";
+export type Tab = "edit" | "live" | "home" | "library" | "settings";
 
 const NAV_ITEMS: { id: Tab; icon: string }[] = [
   { id: "home", icon: "⌂" },
   { id: "edit", icon: "✦" },
   { id: "live", icon: "◉" },
   { id: "library", icon: "▦" },
+  { id: "settings", icon: "⚙" },
 ];
 
 interface BottomNavBarProps {

@@ -1,0 +1,11 @@
+{
+  "name": "hacktour",
+  "private": true,
+  "scripts": {
+    "start": "./start.sh",
+    "dev": "./start.sh",
+    "tunnel": "./start.sh --tunnel",
+    "backend": "npm --prefix backend run dev",
+    "mobile": "npm --prefix mobile start"
+  }
+}
