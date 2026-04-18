@@ -310,13 +310,13 @@ Action types:
 - hype — blast a wave of hype messages into chat
 - shoutout → include "user":"<username>" to shout out a viewer (e.g. "panda shoutout xX_fan99")
 - countdown → include "seconds":<number> (default 5) to start a countdown in chat
-- take_photos → include "photos":{"poses":["pose 1 instruction","pose 2 instruction","pose 3 instruction","pose 4 instruction"]}
-- identify_outfit → no extra fields; the app will capture a frame of the streamer and post shopping links in chat
+- pull_up_clip → include "query":"<search description>" — streamer wants to show a clip from their library on stream. Extract the descriptive part as the search query. Examples: "pull up the clip where I was cooking" → query:"cooking", "show that dancing clip" → query:"dancing", "play the intro video" → query:"intro video"
 - none
 
 If the streamer says anything like "take pictures of me", "take my photo", "photo shoot", "snap me", use take_photos with 3-5 fun, short pose instructions (e.g. "big smile", "look over your shoulder", "peace sign", "candid laugh").
 If the streamer says anything like "what am I wearing", "rate my fit", "find my outfit", "where can I buy this", "link my clothes", "what's this shirt", use identify_outfit.
 If you detect the streamer is asking chat to choose between things, use create_poll automatically.
+If the streamer says "pull up", "show", "play", or "find" followed by a clip description, use pull_up_clip with the descriptive part as the query.
 If no action needed use {"type":"none"}.`;
 
   try {
