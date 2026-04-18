@@ -85,7 +85,7 @@ export default function LibraryScreen() {
 
   return (
     <View style={styles.root}>
-      <LinearGradient colors={[COLORS.background, "#0D0D1A", COLORS.background]} style={StyleSheet.absoluteFill} />
+      <LinearGradient colors={[COLORS.background, COLORS.uploadBg, COLORS.background]} style={StyleSheet.absoluteFill} />
 
       {loading ? (
         <View style={styles.centered}>
