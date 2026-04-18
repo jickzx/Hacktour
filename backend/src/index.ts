@@ -28,6 +28,7 @@ const zai = new OpenAI({
   baseURL: process.env.ZAI_BASE_URL!,
 });
 const ZAI_MODEL = process.env.ZAI_MODEL ?? "glm-4.6v";
+const ZAI_MODEL_CHAT = process.env.ZAI_MODEL_CHAT ?? "glm-5-turbo";
 
 const upload = multer({ dest: "/tmp/hacktour-uploads/" });
 
@@ -194,7 +195,7 @@ If no action needed use {"type":"none"}.`;
 
   try {
     const result = await zai.chat.completions.create({
-      model: ZAI_MODEL,
+      model: ZAI_MODEL_CHAT,
       temperature: pollOnly ? 0 : 0.8,
       messages: [
         {
