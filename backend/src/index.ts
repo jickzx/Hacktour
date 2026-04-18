@@ -14,6 +14,7 @@ import editRouter from "./routes/edit";
 import clipsRouter from "./routes/clips";
 import processRouter from "./routes/process";
 import youtubeRouter from "./routes/youtube";
+import photosRouter from "./routes/photos";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -32,6 +33,7 @@ app.use("/api", editRouter);
 app.use("/api", clipsRouter);
 app.use("/api", processRouter);
 app.use("/api", youtubeRouter);
+app.use("/api", photosRouter);
 
 function getGemini() {
   if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
@@ -147,6 +149,109 @@ Rules:
 });
 
 /**
+ * POST /api/detect-poll
+ * Body: { transcript: string }
+ * Returns: { poll: { question, options } | null }
+ * Uses Gemini function calling to detect if streamer is asking chat to vote.
+ */
+app.post("/api/detect-poll", async (req, res) => {
+  const { transcript } = req.body as { transcript?: string };
+  if (!transcript?.trim()) { res.json({ poll: null }); return; }
+
+  // Fast regex gate — skip AI entirely if transcript has no poll-like keywords
+  const looksLikePoll = /\bor\b|\bvs\.?\b|\bversus\b|\bwhich\b|\bshould i\b/i.test(transcript);
+  if (!looksLikePoll) { res.json({ poll: null }); return; }
+
+  try {
+    const result = await getGemini().generateContent({
+      contents: [{ role: "user", parts: [{ text: `Streamer said: "${transcript}"\n\nOnly call create_poll if the streamer is DIRECTLY asking chat to choose between two specific named options (e.g. "McDonald's or KFC?", "cats or dogs?", "iOS or Android?"). The question must be explicit — not a statement, not rhetorical. If in any doubt, do NOT call create_poll.` }] }],
+      tools: [{
+        functionDeclarations: [{
+          name: "create_poll",
+          description: "Create a poll when the streamer asks chat to vote between two options",
+          parameters: {
+            type: "object",
+            properties: {
+              question: { type: "string", description: "The poll question" },
+              optionA: { type: "string", description: "First option" },
+              optionB: { type: "string", description: "Second option" },
+            },
+            required: ["question", "optionA", "optionB"],
+          },
+        }],
+      }],
+      toolConfig: { functionCallingConfig: { mode: "AUTO" as any } },
+    } as any);
+
+    const call = result.response.candidates?.[0]?.content?.parts
+      ?.find((p: any) => p.functionCall?.name === "create_poll")?.functionCall;
+
+    if (!call) { res.json({ poll: null }); return; }
+
+    const args = call.args as { question: string; optionA: string; optionB: string };
+    console.log(`[Poll] Detected: "${args.optionA}" vs "${args.optionB}"`);
+    res.json({ poll: { question: args.question, options: [args.optionA, args.optionB] } });
+  } catch (err) {
+    console.error("[Poll] Error:", err);
+    res.json({ poll: null });
+  }
+});
+
+/**
+ * POST /api/outfit
+ * multipart/form-data: { photo: .jpg }
+ * Returns: { items: Array<{ label: string, query: string, searchUrl: string }> }
+ * Uses Gemini vision to identify clothing items and returns Google Shopping search links.
+ */
+app.post("/api/outfit", upload.single("photo"), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "No photo uploaded" });
+    return;
+  }
+
+  const filePath = req.file.path;
+  console.log(`[Outfit] ${(req.file.size / 1024).toFixed(1)}KB`);
+
+  try {
+    const base64 = fs.readFileSync(filePath).toString("base64");
+    const mimeType = req.file.mimetype || "image/jpeg";
+
+    const result = await getGemini().generateContent([
+      { inlineData: { mimeType, data: base64 } },
+      `Identify each distinct clothing, footwear, or accessory item the person in this image is wearing.
+Return ONLY a JSON array, no markdown. Max 5 items, most prominent first.
+Each item must be a short, specific shopping query (2-6 words) including colour + type + notable detail.
+
+Format: [{"label":"short name","query":"specific search phrase"}]
+Example: [{"label":"Black hoodie","query":"black oversized zip-up hoodie"},{"label":"White sneakers","query":"white chunky low-top sneakers"}]
+
+If no person or clothing is visible, return [].`,
+    ]);
+
+    const raw = result.response.text();
+    const arrMatch = raw.match(/\[[\s\S]*\]/);
+    let parsed: { label: string; query: string }[] = [];
+    try { parsed = JSON.parse(arrMatch?.[0] ?? "[]"); } catch {
+      console.warn("[Outfit] JSON parse failed:", raw.slice(0, 200));
+    }
+
+    const items = parsed.slice(0, 5).map((it) => ({
+      label: String(it.label ?? it.query ?? "item").slice(0, 40),
+      query: String(it.query ?? it.label ?? "").slice(0, 80),
+      searchUrl: `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(String(it.query ?? it.label ?? ""))}`,
+    }));
+
+    console.log(`[Outfit] ${items.length} items`);
+    res.json({ success: true, items });
+  } catch (err) {
+    console.error("[Outfit] Error:", err);
+    res.status(500).json({ success: false, error: String(err) });
+  } finally {
+    try { fs.unlinkSync(filePath); } catch {}
+  }
+});
+
+/**
  * POST /api/assistant
  * Body: { command: string, context: string[] }
  * Returns: { response: string, action?: { type: string, [key: string]: any } }
@@ -182,16 +287,18 @@ If poll detected, respond with ONLY this exact JSON (no markdown, no extra text)
 
 If absolutely no choice/comparison present, respond with ONLY:
 {"action":{"type":"none"}}`
-    : `You are "Zee", a smart voice assistant built into a live streaming app called Stream Mind.
-The app has 3 tabs: home, edit (AI video editor), live (live streaming).
-While live streaming you can control the stream with the following commands.
-You have a fun, energetic, streamer-friendly personality. Keep responses short (1-2 sentences max).
+    : `You are "Panda", a smart voice assistant built into a live streaming app called Stream Mind.
+The app has 4 tabs: home, edit (AI video editor), live (live streaming), library.
+While live streaming you can control the stream with the commands listed below.
+You can also create polls when the streamer mentions a choice between things (e.g. "KFC or McDonald's", "iOS or Android", "cats or dogs").
+You can take a photo shoot of the streamer when they ask you to take pictures of them — you'll guide them through poses and the app will capture each one.
+You have a fun, chill, streamer-friendly personality with panda energy. Keep responses short (1-2 sentences max).
 
 Always respond with valid JSON only — no markdown:
 {"response":"what you say back","action":{"type":"action_type"}}
 
 Action types:
-- navigate_tab → include "tab":"home"|"edit"|"live"
+- navigate_tab → include "tab":"home"|"edit"|"live"|"library"
 - go_live — start the stream
 - end_stream — end the stream
 - mute — mute mic
@@ -199,13 +306,15 @@ Action types:
 - flip_camera — switch front/back camera
 - create_poll → include "poll":{"question":"Which do you prefer?","options":["Option A","Option B"]}
 - close_poll — dismiss the active poll
-- emoji_mode — toggle emoji-only mode (Zee responds in emojis only, chat AI comments go emoji-only)
+- emoji_mode — toggle emoji-only mode (Panda responds in emojis only, chat AI comments go emoji-only)
 - hype — blast a wave of hype messages into chat
-- shoutout → include "user":"<username>" to shout out a viewer (e.g. "z shoutout xX_fan99")
+- shoutout → include "user":"<username>" to shout out a viewer (e.g. "panda shoutout xX_fan99")
 - countdown → include "seconds":<number> (default 5) to start a countdown in chat
 - pull_up_clip → include "query":"<search description>" — streamer wants to show a clip from their library on stream. Extract the descriptive part as the search query. Examples: "pull up the clip where I was cooking" → query:"cooking", "show that dancing clip" → query:"dancing", "play the intro video" → query:"intro video"
 - none
 
+If the streamer says anything like "take pictures of me", "take my photo", "photo shoot", "snap me", use take_photos with 3-5 fun, short pose instructions (e.g. "big smile", "look over your shoulder", "peace sign", "candid laugh").
+If the streamer says anything like "what am I wearing", "rate my fit", "find my outfit", "where can I buy this", "link my clothes", "what's this shirt", use identify_outfit.
 If you detect the streamer is asking chat to choose between things, use create_poll automatically.
 If the streamer says "pull up", "show", "play", or "find" followed by a clip description, use pull_up_clip with the descriptive part as the query.
 If no action needed use {"type":"none"}.`;
@@ -235,6 +344,46 @@ If no action needed use {"type":"none"}.`;
   } catch (err) {
     console.error("[Assistant] Error:", err);
     res.status(500).json({ error: "Assistant failed", detail: String(err) });
+  }
+});
+
+/**
+ * POST /api/copilot
+ * Body: { messages: string[], transcript: string[] }
+ * Returns: { suggestedReply: string, chatSummary: string, modAlert: string | null }
+ */
+app.post("/api/copilot", async (req, res) => {
+  const { messages = [], transcript = [] } = req.body as { messages?: string[]; transcript?: string[] };
+
+  const chatLog = messages.slice(-20).map((m, i) => `${i + 1}. ${m}`).join("\n");
+  const recentSpeech = transcript.slice(-4).join(" | ");
+
+  const prompt = `You are an AI co-pilot for a live streamer using Stream Mind.
+
+Recent chat comments:
+${chatLog || "(no chat yet)"}
+
+Streamer recently said: "${recentSpeech || "(nothing yet)"}"
+
+Return ONLY a JSON object, no markdown:
+{
+  "suggestedReply": "Short engaging thing the streamer could say right now (1-2 sentences, natural and hype)",
+  "chatSummary": "1-sentence vibe check of the chat energy right now",
+  "modAlert": null
+}
+
+If any comments look toxic/spammy, set modAlert to a short warning string instead of null.`;
+
+  try {
+    const result = await getGemini().generateContent(prompt);
+    const raw = result.response.text().trim();
+    const match = raw.match(/\{[\s\S]*\}/);
+    let parsed = { suggestedReply: "", chatSummary: "", modAlert: null as string | null };
+    try { parsed = JSON.parse(match?.[0] ?? "{}"); } catch {}
+    res.json(parsed);
+  } catch (err) {
+    console.error("[Copilot] Error:", err);
+    res.status(500).json({ error: "Copilot failed" });
   }
 });
 
