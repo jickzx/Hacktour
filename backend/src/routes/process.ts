@@ -13,7 +13,7 @@ import multer from "multer";
 import fs from "fs";
 import crypto from "crypto";
 import { generateComposition } from "../services/glm";
-import { processVideo, ensureOutputDir } from "../services/videoProcessor";
+import { processVideo, extractThumbnail, ensureOutputDir } from "../services/videoProcessor";
 import { embedText } from "../services/embedding";
 import { clipStore } from "../services/clipStore";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -37,7 +37,7 @@ router.post("/process", upload.array("videos"), async (req, res) => {
     return;
   }
 
-  let clipsMetadata: { name: string; duration: number; thumbnail?: string }[] = [];
+  let clipsMetadata: { name: string; duration: number; thumbnail?: string; trimStart?: number; trimEnd?: number }[] = [];
   try {
     clipsMetadata = JSON.parse(req.body.clipsMetadata ?? "[]");
   } catch {
@@ -49,6 +49,8 @@ router.post("/process", upload.array("videos"), async (req, res) => {
     name: clipsMetadata[i]?.name ?? f.originalname ?? `clip_${i + 1}.mp4`,
     duration: clipsMetadata[i]?.duration ?? 0,
     thumbnail: clipsMetadata[i]?.thumbnail,
+    trimStart: clipsMetadata[i]?.trimStart,
+    trimEnd: clipsMetadata[i]?.trimEnd,
   }));
 
   const inputPaths = files.map((f) => f.path);
@@ -111,6 +113,14 @@ Each segment should be 3-8 words max for readable subtitles. Cover ALL speech. R
       console.log(`[Process] Injected ${composition.overlays.length} subtitle overlays from transcript`);
     }
 
+    // Inject explicit trimStart/trimEnd from client metadata (overrides AI guess)
+    clips.forEach((meta, i) => {
+      if (composition.clips[i]) {
+        if (meta.trimStart !== undefined) composition.clips[i].trimStart = meta.trimStart;
+        if (meta.trimEnd !== undefined) composition.clips[i].trimEnd = meta.trimEnd;
+      }
+    });
+
     // Step 2: ffmpeg processes the video
     console.log("[Process] Running ffmpeg...");
     const outputPath = await processVideo(inputPaths, composition, jobId);
@@ -118,21 +128,29 @@ Each segment should be 3-8 words max for readable subtitles. Cover ALL speech. R
 
     const videoUrl = `/outputs/${jobId}.mp4`;
 
-    // Step 3: Auto-save to library (non-blocking)
+    // Step 3: Extract thumbnail from processed video
+    let thumbnailUrl: string | undefined;
+    try {
+      await extractThumbnail(outputPath, jobId);
+      thumbnailUrl = `/outputs/thumbs/${jobId}.jpg`;
+    } catch (thumbErr: any) {
+      console.warn("[Process] Thumbnail extraction failed:", thumbErr.message);
+    }
+
+    // Step 4: Auto-save to library (non-blocking)
     let clipId: string | undefined;
     try {
       const embedding = await embedText(prompt);
       const fps = composition.fps || 30;
       const durationSeconds = Math.round(composition.totalDurationFrames / fps) || 30;
       const title = prompt.split(/[.!?]/)[0].trim().slice(0, 60) || "Untitled Clip";
-      const saved = clipStore.saveClip({ prompt, title, embedding, composition, sourceVideoUrl: videoUrl, durationSeconds });
+      const saved = clipStore.saveClip({ prompt, title, embedding, composition, sourceVideoUrl: videoUrl, thumbnailUrl, durationSeconds });
       clipId = saved.id;
     } catch (embedErr: any) {
       console.warn("[Process] Library save skipped:", embedErr.message);
     }
 
-    // Clean up processed output after 15 minutes
-    setTimeout(() => { try { fs.unlinkSync(outputPath); } catch {} }, 15 * 60 * 1000);
+    // Outputs are kept indefinitely so library clips remain playable
 
     res.json({ success: true, videoUrl, composition, clipId });
   } catch (err: any) {

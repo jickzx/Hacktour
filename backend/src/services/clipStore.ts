@@ -42,7 +42,7 @@ loadFromDisk();
 
 export const clipStore = {
   /** Saves a new clip, generates id + createdAt, persists to disk */
-  saveClip(entry: Omit<ClipEntry, "id" | "createdAt">): ClipEntry {
+  saveClip(entry: Omit<ClipEntry, "id" | "createdAt"> & { thumbnailUrl?: string }): ClipEntry {
     const clip: ClipEntry = {
       ...entry,
       id: crypto.randomUUID(),

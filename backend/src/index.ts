@@ -94,11 +94,26 @@ app.post("/api/analyse", upload.single("frame"), async (req, res) => {
     context = JSON.parse(req.body.context ?? "[]");
   } catch {}
   const emojiMode = req.body.emojiMode === "1";
+  const clipMode = req.body.clipMode === "1";
 
-  console.log(`[Analyse] frame ${(base64.length * 0.75 / 1024).toFixed(1)}KB, context: ${context.length}`);
+  console.log(`[Analyse] frame ${(base64.length * 0.75 / 1024).toFixed(1)}KB, context: ${context.length}, clipMode: ${clipMode}`);
 
   try {
     const recentSpeech = context.join(" ... ");
+
+    // ── Clip mode: just return a descriptive clip prompt ──────────────────────
+    if (clipMode) {
+      const clipRes = await getGemini().generateContent([
+        {
+          text: `You are a video clip titler. Look at this livestream frame and the streamer's recent speech, then write a short, punchy clip prompt (5-12 words) that describes what to highlight.${recentSpeech ? `\n\nStreamer just said: "${recentSpeech}"` : ""}\n\nReturn ONLY the clip prompt text, nothing else.`,
+        },
+        { inlineData: { data: base64, mimeType: "image/jpeg" } },
+      ]);
+      const clipPrompt = clipRes.response.text().trim().replace(/^["']|["']$/g, "");
+      console.log(`[Clip] Prompt: "${clipPrompt}"`);
+      res.json({ clipPrompt });
+      return;
+    }
 
     const COMMENTS_SYSTEM = emojiMode
       ? `You are a Twitch/Kick chat viewer in EMOJI ONLY mode. React using ONLY emojis — no words. Return a JSON array of 8-12 objects: [{"user":"name","text":"🔥😂","avatar":"emoji"},...]`
@@ -147,6 +162,28 @@ Rules:
     res.status(500).json({ error: "Analysis failed", detail: String(err) });
   } finally {
     if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+  }
+});
+
+/**
+ * POST /api/clip-prompt
+ * Body: { context: string[] }  — recent transcript lines
+ * Returns: { clipPrompt: string }
+ * Uses Gemini to write a punchy clip title based on what was just said.
+ */
+app.post("/api/clip-prompt", async (req, res) => {
+  const context: string[] = req.body.context ?? [];
+  const speech = context.join(" ").trim();
+  try {
+    const prompt = speech
+      ? `Based on what the streamer just said, write a short punchy clip title (5-12 words) suitable for a highlight reel.\n\nStreamer said: "${speech}"\n\nReturn ONLY the clip title, no quotes, no explanation.`
+      : `Write a short punchy generic livestream highlight title (5-10 words). Return ONLY the title.`;
+    const result = await getGemini().generateContent(prompt);
+    const clipPrompt = result.response.text().trim().replace(/^["']|["']$/g, "");
+    res.json({ clipPrompt });
+  } catch (err) {
+    console.warn("[clip-prompt] Gemini error:", err);
+    res.json({ clipPrompt: speech || "Highlight this moment" });
   }
 });
 

@@ -13,4 +13,5 @@ export const QUICK_PROMPTS = [
   "Color grade",
   "Add music",
   "Zoom on action",
+  "Clip",
 ];

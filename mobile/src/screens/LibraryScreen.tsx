@@ -13,13 +13,17 @@ import {
   ActivityIndicator,
   Dimensions,
   Image,
+  Modal,
+  SafeAreaView,
 } from "react-native";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS } from "../constants/theme";
 import ClipCard from "../components/ClipCard";
 import { listClips, searchClips, listPhotos, photoUrl, Photo } from "../services/api";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const CARD_WIDTH = (SCREEN_WIDTH - SPACING.lg * 2 - SPACING.md) / 2;
+const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 interface Clip {
   id: string;
@@ -28,6 +32,7 @@ interface Clip {
   durationSeconds: number;
   createdAt: string;
   sourceVideoUrl?: string;
+  thumbnailUrl?: string;
 }
 
 type Section = "clips" | "photos";
@@ -42,6 +47,7 @@ export default function LibraryScreen() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [selectedClip, setSelectedClip] = useState<Clip | null>(null);
 
   const loadClips = useCallback(async () => {
     try {
@@ -198,6 +204,8 @@ export default function LibraryScreen() {
                 durationSeconds={item.durationSeconds}
                 createdAt={item.createdAt}
                 sourceVideoUrl={item.sourceVideoUrl}
+                thumbnailUrl={item.thumbnailUrl}
+                onPress={() => setSelectedClip(item)}
               />
             </View>
           )}
@@ -242,9 +250,65 @@ export default function LibraryScreen() {
           }}
         />
       )}
+      {selectedClip && (
+        <ClipPlayerModal clip={selectedClip} onClose={() => setSelectedClip(null)} />
+      )}
     </View>
   );
 }
+
+function ClipPlayerModal({ clip, onClose }: { clip: { title: string; sourceVideoUrl?: string; durationSeconds: number }; onClose: () => void }) {
+  const videoUrl = clip.sourceVideoUrl
+    ? (clip.sourceVideoUrl.startsWith("http") ? clip.sourceVideoUrl : `${API_BASE}${clip.sourceVideoUrl}`)
+    : null;
+  const player = useVideoPlayer(videoUrl, (p) => { p.play(); });
+
+  return (
+    <Modal visible animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={modalStyles.root}>
+        <View style={modalStyles.header}>
+          <Text style={modalStyles.title} numberOfLines={2}>{clip.title}</Text>
+          <TouchableOpacity style={modalStyles.closeBtn} onPress={onClose}>
+            <Text style={modalStyles.closeText}>✕</Text>
+          </TouchableOpacity>
+        </View>
+        {videoUrl ? (
+          <VideoView
+            player={player}
+            style={modalStyles.video}
+            contentFit="contain"
+            nativeControls
+          />
+        ) : (
+          <View style={modalStyles.noVideo}>
+            <Text style={modalStyles.noVideoText}>No video available</Text>
+          </View>
+        )}
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+const modalStyles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#000" },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    gap: SPACING.md,
+  },
+  title: { flex: 1, color: "#fff", fontSize: FONT_SIZES.md, fontWeight: WEIGHTS.bold },
+  closeBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    alignItems: "center", justifyContent: "center",
+  },
+  closeText: { color: "#fff", fontSize: 16, fontWeight: WEIGHTS.bold },
+  video: { flex: 1, width: "100%" },
+  noVideo: { flex: 1, alignItems: "center", justifyContent: "center" },
+  noVideoText: { color: "rgba(255,255,255,0.5)", fontSize: FONT_SIZES.md },
+});
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.background },

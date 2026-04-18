@@ -26,7 +26,7 @@ import { COLORS, SPACING, RADII, WEIGHTS } from "../constants/theme";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
-import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem } from "../services/api";
+import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem, processEdit } from "../services/api";
 import { getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings } from "../services/voiceSettings";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -131,6 +131,14 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const readyResolverRef = useRef<((result: "ready" | "stop" | "timeout") => void) | null>(null);
   const [outfitScanning, setOutfitScanning] = useState(false);
   const outfitBusyRef = useRef(false);
+  const [isClipping, setIsClipping] = useState(false);
+  const isClippingRef = useRef(false);
+  // Rolling 35s video buffer — always holds the URI of the most recently completed chunk
+  const lastVideoChunkUriRef = useRef<string | null>(null);
+  // Whether the buffer loop is actively recording right now
+  const videoBufferActiveRef = useRef(false);
+  // Resolve fn to interrupt the current recordAsync and get its URI immediately
+  const stopCurrentBufferRef = useRef<(() => void) | null>(null);
   const [activeClip, setActiveClip] = useState<{
     id: string; title: string; sourceVideoUrl: string; durationSeconds: number; score: number;
   } | null>(null);
@@ -304,10 +312,12 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       }
       const best = results[0];
       console.log(`[ClipOverlay] Best match: "${best.title}" (score: ${best.score.toFixed(3)})`);
+      const rawUrl = best.sourceVideoUrl ?? "";
+      const fullUrl = rawUrl.startsWith("http") ? rawUrl : `${BACKEND_URL}${rawUrl}`;
       setActiveClip({
         id: best.id,
         title: best.title,
-        sourceVideoUrl: best.sourceVideoUrl ?? "",
+        sourceVideoUrl: fullUrl,
         durationSeconds: best.durationSeconds,
         score: best.score,
       });
@@ -717,6 +727,132 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     }
   }, [speak, pushComment]); // eslint-disable-line
 
+  // ── Rolling 35s video buffer loop ────────────────────────────────────────────
+  // Continuously records 35s chunks while live. The last completed chunk URI is
+  // always available in lastVideoChunkUriRef so the clip button can grab it.
+
+  const startVideoBuffer = useCallback(async () => {
+    if (videoBufferActiveRef.current) return;
+    videoBufferActiveRef.current = true;
+    console.log("[VideoBuffer] Starting rolling buffer");
+
+    // Wait for camera to be in video mode and mounted before first record
+    await new Promise((r) => setTimeout(r, 1500));
+
+    while (videoBufferActiveRef.current) {
+      // Pause buffer during photo/outfit sessions (they need picture mode)
+      if (photoSessionRef.current || outfitBusyRef.current) {
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+
+      if (!cameraRef.current) {
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+
+      let succeeded = false;
+      try {
+        await new Promise<void>((resolveChunk) => {
+          stopCurrentBufferRef.current = resolveChunk;
+          cameraRef.current!.recordAsync({ maxDuration: 35 })
+            .then((result) => {
+              if (result?.uri) {
+                lastVideoChunkUriRef.current = result.uri;
+                console.log(`[VideoBuffer] Chunk saved: ${result.uri}`);
+                succeeded = true;
+              }
+              resolveChunk();
+            })
+            .catch((err) => {
+              console.warn("[VideoBuffer] recordAsync error:", err.message ?? err);
+              resolveChunk();
+            });
+        });
+        stopCurrentBufferRef.current = null;
+      } catch (err: any) {
+        console.warn("[VideoBuffer] Loop error:", err.message ?? err);
+      }
+
+      // Back off before retrying if recording failed immediately
+      if (!succeeded) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+
+    videoBufferActiveRef.current = false;
+    console.log("[VideoBuffer] Stopped");
+  }, []);
+
+  const stopVideoBuffer = useCallback(() => {
+    videoBufferActiveRef.current = false;
+    if (cameraRef.current) {
+      try { cameraRef.current.stopRecording(); } catch {}
+    }
+    stopCurrentBufferRef.current?.();
+    stopCurrentBufferRef.current = null;
+  }, []);
+
+  // ── Clip: stop current buffer chunk, grab the video+audio, embed via Gemini ──
+
+  const handleClip = useCallback(async () => {
+    if (isClippingRef.current || photoSessionRef.current) return;
+    isClippingRef.current = true;
+    setIsClipping(true);
+
+    pushComment({ id: `clip-start-${Date.now()}`, user: "✂️ Panda", text: "Clipping last 30s…", avatar: "🎬" });
+
+    try {
+      // Stop the current recording chunk so we get the URI immediately
+      if (cameraRef.current) {
+        try { cameraRef.current.stopRecording(); } catch {}
+      }
+      // Give recordAsync time to flush and write the file
+      await new Promise((r) => setTimeout(r, 800));
+
+      const videoUri = lastVideoChunkUriRef.current;
+      if (!videoUri) {
+        pushComment({ id: `clip-novid-${Date.now()}`, user: "✂️ Panda", text: "No video buffered yet — wait a few seconds and try again", avatar: "🎬" });
+        return;
+      }
+
+      // Ask Gemini to describe the moment using recent speech context
+      const contextLines = transcriptContextRef.current.slice(-4).join(" ");
+      let clipPrompt = contextLines || "Highlight this moment";
+      try {
+        const geminiRes = await fetch(`${BACKEND_URL}/api/clip-prompt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ context: transcriptContextRef.current.slice(-4) }),
+        });
+        const geminiData = await geminiRes.json();
+        if (geminiData.clipPrompt) clipPrompt = geminiData.clipPrompt;
+      } catch {}
+
+      pushComment({ id: `clip-prompt-${Date.now()}`, user: "✂️ Panda", text: `"${clipPrompt}"`, avatar: "🎬" });
+
+      // Restart the buffer before the slow upload so we don't lose coverage
+      startVideoBuffer();
+
+      // Send the real video file to /api/process
+      // trimStart=5 trims the first ~5s (buffer startup artifact), giving ~30s of content
+      const result = await processEdit(clipPrompt, [
+        { name: "livestream_clip.mp4", duration: 35, uri: videoUri, trimStart: 5, trimEnd: 35 },
+      ]);
+
+      speak("Clip saved to your library!");
+      pushComment({ id: `clip-done-${Date.now()}`, user: "✂️ Panda", text: `Saved! "${clipPrompt}"`, avatar: "🎬" });
+      console.log(`[Clip] clipId: ${result.clipId}`);
+    } catch (err: any) {
+      console.warn("[Clip] Error:", err);
+      pushComment({ id: `clip-err-${Date.now()}`, user: "✂️ Panda", text: "Clip failed — try again", avatar: "🎬" });
+      startVideoBuffer();
+    } finally {
+      isClippingRef.current = false;
+      setIsClipping(false);
+    }
+  }, [speak, pushComment, startVideoBuffer]); // eslint-disable-line
+
   useEffect(() => {
     if (isTranscribing && isLive) {
       isAudioLoopRef.current = true;
@@ -747,6 +883,8 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     setDuration(0);
     // Auto-start transcription — small delay to let camera settle
     setTimeout(() => setIsTranscribing(true), 800);
+    // Start video buffer after camera is fully in video mode
+    setTimeout(() => startVideoBuffer(), 2500);
   };
 
   const handleEndStream = () => {
@@ -755,6 +893,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       {
         text: "End", style: "destructive",
         onPress: async () => {
+          stopVideoBuffer();
           await stopRecording();
           setIsLive(false);
           setViewers(0);
@@ -863,6 +1002,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         {/* Clip overlay */}
         {activeClip && (
           <ClipOverlay
+            key={activeClip.id}
             clip={activeClip}
             onClose={() => setActiveClip(null)}
           />
@@ -886,6 +1026,13 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         {outfitScanning && (
           <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
             <Text style={styles.zeeText}>👗 Gemini is scanning your fit…</Text>
+          </View>
+        )}
+
+        {/* Clip banner */}
+        {isClipping && (
+          <View style={[styles.statusBanner, styles.clipBanner]} pointerEvents="none">
+            <Text style={styles.clipBannerText}>✂️ Clipping with Gemini…</Text>
           </View>
         )}
 
@@ -983,6 +1130,13 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                 onPress={() => setShowCommands(v => !v)}
               >
                 <Text style={styles.sideBtnIcon}>🐼</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.sideBtn, styles.sideBtnClip, isClipping && styles.sideBtnRed]}
+                onPress={handleClip}
+                disabled={isClipping}
+              >
+                <Text style={styles.sideBtnIcon}>✂️</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -1169,6 +1323,8 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 12, color: COLORS.accent, fontStyle: "italic" },
   zeeBanner: { borderColor: "#facc1555", backgroundColor: "rgba(0,0,0,0.7)" },
   zeeText: { fontSize: 13, color: "#facc15", fontWeight: "700" },
+  clipBanner: { borderColor: "#34d39955", backgroundColor: "rgba(0,0,0,0.7)" },
+  clipBannerText: { fontSize: 13, color: "#34d399", fontWeight: "700" },
 
   // Copilot panel
   copilotPanel: {
@@ -1311,6 +1467,7 @@ const styles = StyleSheet.create({
   sideBtnGreen: { borderColor: COLORS.accent, backgroundColor: `${COLORS.accent}33` },
   sideBtnPurple: { borderColor: "#a855f7", backgroundColor: "rgba(168,85,247,0.25)" },
   sideBtnActive: { borderColor: "#34d399", backgroundColor: "rgba(52,211,153,0.2)" },
+  sideBtnClip: { borderColor: "#34d399", backgroundColor: "rgba(52,211,153,0.15)" },
   emojiBanner: { borderColor: "#a855f755", backgroundColor: "rgba(0,0,0,0.7)" },
   emojiModeText: { fontSize: 13, color: "#a855f7", fontWeight: "700" },
   sideBtnIcon: { fontSize: 11, fontWeight: "700", color: "#FFFFFF", letterSpacing: 0.5 },

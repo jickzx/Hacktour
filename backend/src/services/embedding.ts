@@ -4,7 +4,7 @@
  */
 
 const EMBEDDING_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
 
 /**
  * Embeds a text string using Google's text-embedding-004 model.
@@ -18,7 +18,7 @@ export async function embedText(text: string): Promise<number[]> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "models/text-embedding-004",
+      model: "models/gemini-embedding-001",
       content: { parts: [{ text }] },
     }),
   });

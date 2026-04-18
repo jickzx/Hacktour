@@ -53,12 +53,12 @@ export async function generateEdit(
 /** Uploads actual video files, processes them with ffmpeg, returns processed video URL */
 export async function processEdit(
   prompt: string,
-  clips: { name: string; duration: number; thumbnail?: string; uri: string }[]
+  clips: { name: string; duration: number; thumbnail?: string; uri: string; trimStart?: number; trimEnd?: number }[]
 ): Promise<{ videoUrl: string; composition: object; clipId?: string }> {
   const form = new FormData();
   form.append("prompt", prompt);
 
-  const clipsMetadata = clips.map(({ name, duration, thumbnail }) => ({ name, duration, thumbnail }));
+  const clipsMetadata = clips.map(({ name, duration, thumbnail, trimStart, trimEnd }) => ({ name, duration, thumbnail, trimStart, trimEnd }));
   form.append("clipsMetadata", JSON.stringify(clipsMetadata));
 
   for (const clip of clips) {

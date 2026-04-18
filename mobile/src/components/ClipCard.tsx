@@ -1,8 +1,10 @@
 /**
  * ClipCard — XHS-style post card for a saved clip.
  */
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS } from "../constants/theme";
+
+const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 export interface ClipCardProps {
   title: string;
@@ -10,6 +12,7 @@ export interface ClipCardProps {
   durationSeconds: number;
   createdAt: string;
   sourceVideoUrl?: string;
+  thumbnailUrl?: string;
   onPress?: () => void;
 }
 
@@ -33,12 +36,22 @@ export default function ClipCard({
   durationSeconds,
   createdAt,
   sourceVideoUrl,
+  thumbnailUrl,
   onPress,
 }: ClipCardProps) {
+  const thumbUri = thumbnailUrl
+    ? (thumbnailUrl.startsWith("http") ? thumbnailUrl : `${API_BASE}${thumbnailUrl}`)
+    : null;
+
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.85}>
       <View style={styles.thumb}>
-        <Text style={styles.playIcon}>▶</Text>
+        {thumbUri ? (
+          <Image source={{ uri: thumbUri }} style={styles.thumbImg} resizeMode="cover" />
+        ) : null}
+        <View style={styles.thumbOverlay}>
+          <Text style={styles.playIcon}>▶</Text>
+        </View>
         <View style={styles.durationBadge}>
           <Text style={styles.durationText}>{formatDuration(durationSeconds)}</Text>
         </View>
@@ -74,6 +87,15 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
+  },
+  thumbImg: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  thumbOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.25)",
   },
   playIcon: {
     fontSize: 32,

@@ -78,6 +78,8 @@ export default function AIEditScreen() {
   const [error, setError] = useState<string | null>(null);
   const [showSavedBanner, setShowSavedBanner] = useState(false);
   const [activeQuick, setActiveQuick] = useState<string | null>(null);
+  const [trimStart, setTrimStart] = useState("");
+  const [trimEnd, setTrimEnd] = useState("");
 
   const handleUpload = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -126,23 +128,33 @@ export default function AIEditScreen() {
   };
 
   const handleGenerate = async () => {
-    if (!prompt.trim() || clips.length === 0) return;
+    const canClip = activeQuick === "Clip" && (trimStart !== "" || trimEnd !== "");
+    if ((!prompt.trim() && !canClip) || clips.length === 0) return;
 
     setIsGenerating(true);
     setComposition(null);
     setError(null);
 
     try {
+      const trimStartSec = activeQuick === "Clip" && trimStart !== "" ? parseFloat(trimStart) : undefined;
+      const trimEndSec = activeQuick === "Clip" && trimEnd !== "" ? parseFloat(trimEnd) : undefined;
+
+      const effectivePrompt = activeQuick === "Clip"
+        ? `Clip the video${trimStartSec !== undefined ? ` from ${trimStartSec}s` : ""}${trimEndSec !== undefined ? ` to ${trimEndSec}s` : ""}${prompt.trim() ? `, ${prompt.trim()}` : ""}`
+        : prompt;
+
       const clipPayload = await Promise.all(
         clips.map(async (clip) => ({
           name: clip.name,
           duration: clip.durationSecs,
           uri: clip.uri,
           thumbnail: await readThumbnailDataUrl(clip.thumbnail),
+          trimStart: trimStartSec,
+          trimEnd: trimEndSec !== undefined ? trimEndSec : (trimStartSec !== undefined ? clip.durationSecs : undefined),
         }))
       );
 
-      const result = await processEdit(prompt, clipPayload);
+      const result = await processEdit(effectivePrompt, clipPayload);
       setComposition(result.composition as CompositionResult);
       setPreviewUri(result.videoUrl);
       if (result.clipId) {
@@ -160,6 +172,10 @@ export default function AIEditScreen() {
 
   const handleQuickPress = (label: string) => {
     setActiveQuick(label);
+    if (label === "Clip") {
+      // Don't append to prompt — trim range will be injected at generate time
+      return;
+    }
     setPrompt((p) => (p ? `${p}, ${label.toLowerCase()}` : label));
   };
 
@@ -269,14 +285,46 @@ export default function AIEditScreen() {
           ))}
         </View>
 
+        {/* Trim range inputs — shown when "Clip" quick prompt is active */}
+        {activeQuick === "Clip" && (
+          <View style={styles.trimWrap}>
+            <Text style={styles.sectionLabel}>Trim range (seconds)</Text>
+            <View style={styles.trimRow}>
+              <View style={styles.trimField}>
+                <Text style={styles.trimLabel}>Start</Text>
+                <TextInput
+                  style={styles.trimInput}
+                  value={trimStart}
+                  onChangeText={setTrimStart}
+                  placeholder="0"
+                  placeholderTextColor={COLORS.textMuted}
+                  keyboardType="decimal-pad"
+                />
+              </View>
+              <Text style={styles.trimDash}>→</Text>
+              <View style={styles.trimField}>
+                <Text style={styles.trimLabel}>End</Text>
+                <TextInput
+                  style={styles.trimInput}
+                  value={trimEnd}
+                  onChangeText={setTrimEnd}
+                  placeholder={clips[0] ? String(Math.floor(clips[0].durationSecs)) : "end"}
+                  placeholderTextColor={COLORS.textMuted}
+                  keyboardType="decimal-pad"
+                />
+              </View>
+            </View>
+          </View>
+        )}
+
         {/* Generate button — solid coral pill */}
         <TouchableOpacity
           style={[
             styles.generateBtn,
-            (!prompt.trim() || clips.length === 0 || isGenerating) && styles.generateBtnDisabled,
+            ((!prompt.trim() && !(activeQuick === "Clip" && (trimStart !== "" || trimEnd !== ""))) || clips.length === 0 || isGenerating) && styles.generateBtnDisabled,
           ]}
           onPress={handleGenerate}
-          disabled={!prompt.trim() || clips.length === 0 || isGenerating}
+          disabled={(!prompt.trim() && !(activeQuick === "Clip" && (trimStart !== "" || trimEnd !== ""))) || clips.length === 0 || isGenerating}
           activeOpacity={0.85}
         >
           <Text style={styles.generateText}>
@@ -482,6 +530,22 @@ const styles = StyleSheet.create({
   chip: { paddingVertical: SPACING.xs },
   chipText: { fontSize: FONT_SIZES.md, color: COLORS.textMuted, fontWeight: WEIGHTS.medium },
   chipTextActive: { color: COLORS.text, fontWeight: WEIGHTS.bold },
+
+  trimWrap: { marginBottom: SPACING.lg },
+  trimRow: { flexDirection: "row", alignItems: "center", gap: SPACING.md },
+  trimField: { flex: 1 },
+  trimLabel: { fontSize: FONT_SIZES.sm, color: COLORS.textMuted, marginBottom: 4 },
+  trimInput: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADII.md,
+    padding: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.text,
+    borderWidth: 1,
+    borderColor: COLORS.borderLight,
+    textAlign: "center",
+  },
+  trimDash: { fontSize: FONT_SIZES.lg, color: COLORS.textMuted, marginTop: 18 },
 
   generateBtn: {
     backgroundColor: COLORS.primary,

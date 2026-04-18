@@ -32,8 +32,31 @@ if (!DRAWTEXT_AVAILABLE) {
   console.warn("[videoProcessor] drawtext filter unavailable (ffmpeg built without libfreetype) — subtitle overlays will be skipped");
 }
 
+const THUMB_DIR = path.join(OUTPUT_DIR, "thumbs");
+
 export function ensureOutputDir() {
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  if (!fs.existsSync(THUMB_DIR)) fs.mkdirSync(THUMB_DIR, { recursive: true });
+}
+
+/** Extract a single JPEG frame from a video at `seekSecs` seconds. Returns the output path. */
+export async function extractThumbnail(videoPath: string, jobId: string, seekSecs = 2): Promise<string> {
+  ensureOutputDir();
+  const outPath = path.join(THUMB_DIR, `${jobId}.jpg`);
+  return new Promise((resolve, reject) => {
+    ffmpeg(videoPath)
+      .seekInput(seekSecs)
+      .outputOptions([
+        "-vframes", "1",
+        "-vf", "scale=540:960:force_original_aspect_ratio=decrease,pad=540:960:(ow-iw)/2:(oh-ih)/2:color=black",
+        "-f", "image2",
+        "-q:v", "3",
+      ])
+      .output(outPath)
+      .on("end", () => resolve(outPath))
+      .on("error", (err, _stdout, stderr) => reject(new Error(stderr || err.message)))
+      .run();
+  });
 }
 
 /**

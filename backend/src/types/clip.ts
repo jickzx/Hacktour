@@ -9,6 +9,7 @@ export interface ClipEntry {
   embedding: number[];
   composition: RemotionComposition;
   sourceVideoUrl: string;
+  thumbnailUrl?: string;
   durationSeconds: number;
   createdAt: string;
   title: string;

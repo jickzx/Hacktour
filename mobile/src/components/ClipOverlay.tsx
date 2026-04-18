@@ -2,9 +2,9 @@
  * ClipOverlay -- floating video player that shows a clip from the library
  * over the live stream. Slides in from left, auto-dismisses when video ends.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Animated, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { Video, ResizeMode, AVPlaybackStatusSuccess } from "expo-av";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII } from "../constants/theme";
 
@@ -23,7 +23,23 @@ interface Props {
 
 export default function ClipOverlay({ clip, onClose }: Props) {
   const slideAnim = useRef(new Animated.Value(-400)).current;
-  const [playbackDone, setPlaybackDone] = useState(false);
+
+  const player = useVideoPlayer(clip.sourceVideoUrl || null, (p) => {
+    p.play();
+  });
+
+  // Auto-dismiss when playback ends
+  useEffect(() => {
+    let hasPlayed = false;
+    const sub = player.addListener("playingChange", (isPlaying) => {
+      if (isPlaying) {
+        hasPlayed = true;
+      } else if (hasPlayed && player.currentTime > 0) {
+        setTimeout(handleClose, 800);
+      }
+    });
+    return () => sub.remove();
+  }, [player]); // eslint-disable-line
 
   useEffect(() => {
     Animated.spring(slideAnim, {
@@ -40,14 +56,6 @@ export default function ClipOverlay({ clip, onClose }: Props) {
       duration: 250,
       useNativeDriver: true,
     }).start(onClose);
-  };
-
-  const handlePlaybackUpdate = (status: AVPlaybackStatusSuccess) => {
-    if (status.isLoaded && status.didJustFinish && !playbackDone) {
-      setPlaybackDone(true);
-      // Short delay so the user sees it finished before dismissing
-      setTimeout(handleClose, 800);
-    }
   };
 
   const matchPct = Math.round(clip.score * 100);
@@ -72,15 +80,11 @@ export default function ClipOverlay({ clip, onClose }: Props) {
 
         {clip.sourceVideoUrl ? (
           <View style={styles.videoWrap}>
-            <Video
-              source={{ uri: clip.sourceVideoUrl }}
+            <VideoView
+              player={player}
               style={styles.video}
-              resizeMode={ResizeMode.CONTAIN}
-              shouldPlay
-              isLooping={false}
-              onPlaybackStatusUpdate={(status) => {
-                if (status.isLoaded) handlePlaybackUpdate(status as AVPlaybackStatusSuccess);
-              }}
+              contentFit="contain"
+              nativeControls={false}
             />
           </View>
         ) : (
@@ -90,9 +94,7 @@ export default function ClipOverlay({ clip, onClose }: Props) {
           </View>
         )}
 
-        <Text style={styles.footer}>
-          {clip.durationSeconds}s
-        </Text>
+        <Text style={styles.footer}>{clip.durationSeconds}s</Text>
       </LinearGradient>
     </Animated.View>
   );
@@ -124,48 +126,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.sm,
     paddingVertical: 2,
   },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: "800",
-    color: "#fff",
-    letterSpacing: 1,
-  },
-  matchText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: COLORS.accent,
-    flex: 1,
-  },
+  badgeText: { fontSize: 10, fontWeight: "800", color: "#fff", letterSpacing: 1 },
+  matchText: { fontSize: 10, fontWeight: "700", color: COLORS.accent, flex: 1 },
   closeBtn: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 22, height: 22, borderRadius: 11,
     backgroundColor: "rgba(255,255,255,0.1)",
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: "center", justifyContent: "center",
   },
   closeBtnText: { fontSize: 11, color: "rgba(255,255,255,0.6)", fontWeight: "700" },
   title: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#fff",
-    marginBottom: SPACING.sm,
-    lineHeight: 18,
+    fontSize: 13, fontWeight: "700", color: "#fff",
+    marginBottom: SPACING.sm, lineHeight: 18,
   },
   videoWrap: {
     borderRadius: RADII.md,
     overflow: "hidden",
-    aspectRatio: 16 / 9,
+    aspectRatio: 9 / 16,
     backgroundColor: "#000",
     marginBottom: SPACING.sm,
   },
-  video: {
-    width: "100%",
-    height: "100%",
-  },
+  video: { width: "100%", height: "100%" },
   noVideoWrap: {
     borderRadius: RADII.md,
-    aspectRatio: 16 / 9,
+    aspectRatio: 9 / 16,
     backgroundColor: COLORS.surfaceLight,
     alignItems: "center",
     justifyContent: "center",
@@ -173,9 +156,5 @@ const styles = StyleSheet.create({
   },
   noVideoIcon: { fontSize: 28, color: COLORS.textMuted },
   noVideoText: { fontSize: 11, color: COLORS.textMuted, marginTop: SPACING.xs },
-  footer: {
-    fontSize: 10,
-    color: "rgba(255,255,255,0.35)",
-    textAlign: "right",
-  },
+  footer: { fontSize: 10, color: "rgba(255,255,255,0.35)", textAlign: "right" },
 });
