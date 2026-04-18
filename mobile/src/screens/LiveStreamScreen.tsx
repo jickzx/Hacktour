@@ -27,6 +27,7 @@ import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
 import { searchClips } from "../services/api";
+import { loadVoiceSettings, subscribeVoiceSettings } from "../services/voiceSettings";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
