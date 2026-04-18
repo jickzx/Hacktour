@@ -21,3 +21,5 @@ give gpt for prompt on filters then puts it onto social media without you doing 
 
 south asia has facebook live, tiktok live. have an auction in comments section - e.g, you are selling something, and then the commenters can auction. tools can come in and disrupt it
 ^ though not alot watches it on live, so add marketing and integrate it to the live - buy off the fit and tada 
+
+add remotion (ai video editing). gl can control code and create videos
