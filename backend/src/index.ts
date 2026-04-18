@@ -115,6 +115,68 @@ Rules:
   }
 });
 
+/**
+ * POST /api/assistant
+ * Body: { command: string, context: string[] }
+ * Returns: { response: string, action?: { type: string, [key: string]: any } }
+ *
+ * action types: navigate_tab (tab: home|edit|live), go_live, end_stream,
+ *               mute, unmute, flip_camera, none
+ */
+app.post("/api/assistant", express.json(), async (req, res) => {
+  const { command, context = [] } = req.body as { command?: string; context?: string[] };
+
+  if (!command?.trim()) {
+    res.status(400).json({ error: "Missing command" });
+    return;
+  }
+
+  console.log(`[Assistant] Command: "${command}"`);
+
+  try {
+    const result = await zai.chat.completions.create({
+      model: ZAI_MODEL,
+      messages: [
+        {
+          role: "system",
+          content: `You are "Zee", a smart voice assistant built into a live streaming app called Stream Mind.
+The app has 3 tabs: home, edit (AI video editor), live (live streaming).
+While live streaming you can: go_live, end_stream, mute, unmute, flip_camera.
+You have a fun, energetic, streamer-friendly personality. Keep responses short (1-2 sentences max).
+
+Always respond with valid JSON only:
+{"response":"what you say back","action":{"type":"action_type"}}
+
+Action types: navigate_tab (include "tab":"home"|"edit"|"live"), go_live, end_stream, mute, unmute, flip_camera, none
+If no action needed use {"type":"none"}.`,
+        },
+        ...(context.length ? [{
+          role: "user" as const,
+          content: `Recent stream context: ${context.slice(-3).join(" | ")}`,
+        }] : []),
+        {
+          role: "user",
+          content: command,
+        },
+      ],
+      temperature: 0.8,
+    });
+
+    const raw = (result.choices[0].message.content ?? "")
+      .replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
+
+    let parsed: { response: string; action?: Record<string, unknown> } = { response: "Got it!", action: { type: "none" } };
+    try { parsed = JSON.parse(raw); } catch { console.warn("[Assistant] JSON parse failed:", raw.slice(0, 200)); }
+
+    console.log(`[Assistant] Response: "${parsed.response}", Action: ${JSON.stringify(parsed.action)}`);
+    res.json(parsed);
+
+  } catch (err) {
+    console.error("[Assistant] Error:", err);
+    res.status(500).json({ error: "Assistant failed", detail: String(err) });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Backend running on http://localhost:${PORT}`);
 });

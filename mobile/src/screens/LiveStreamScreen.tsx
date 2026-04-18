@@ -18,8 +18,10 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
+import * as Speech from "expo-speech";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII } from "../constants/theme";
+import type { AssistantAction } from "../../App";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -43,7 +45,16 @@ interface Comment {
 
 const { height: SCREEN_H } = Dimensions.get("window");
 
-export default function LiveStreamScreen() {
+// Wake word variants — "zee", "z", "zy", "zed", "hey z", "hey zee"
+const WAKE_WORDS = /\b(zee|zed|zy|hey\s*z(?:ee|ed)?)\b/i;
+
+interface Props {
+  onAssistantAction: (action: AssistantAction) => void;
+  pendingAction: AssistantAction | null;
+  onPendingActionConsumed: () => void;
+}
+
+export default function LiveStreamScreen({ onAssistantAction, pendingAction, onPendingActionConsumed }: Props) {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [micPermission, requestMicPermission] = useMicrophonePermissions();
 
@@ -65,6 +76,7 @@ export default function LiveStreamScreen() {
   const isLiveRef = useRef(false);
   const isTranscribingRef = useRef(false);
   const transcriptContextRef = useRef<string[]>([]);
+  const [assistantActive, setAssistantActive] = useState(false);
   isLiveRef.current = isLive;
   isTranscribingRef.current = isTranscribing;
 
@@ -119,6 +131,67 @@ export default function LiveStreamScreen() {
   }, [pushComment]);
 
 
+  // ── Assistant: handle pendingAction from App.tsx ─────────────────────────────
+
+  useEffect(() => {
+    if (!pendingAction || pendingAction.type === "none") return;
+    switch (pendingAction.type) {
+      case "go_live":      if (!isLive) handleGoLive(); break;
+      case "end_stream":   if (isLive) handleEndStream(); break;
+      case "mute":         setIsMuted(true); break;
+      case "unmute":       setIsMuted(false); break;
+      case "flip_camera":  setFacing(f => f === "front" ? "back" : "front"); break;
+    }
+    onPendingActionConsumed();
+  }, [pendingAction]); // eslint-disable-line
+
+  // ── Assistant: detect wake word in transcript ─────────────────────────────────
+
+  const triggerAssistant = useCallback(async (fullTranscript: string) => {
+    const match = fullTranscript.match(WAKE_WORDS);
+    if (!match) return;
+
+    // Extract everything after the wake word as the command
+    const afterWake = fullTranscript.slice(fullTranscript.indexOf(match[0]) + match[0].length).trim();
+    const command = afterWake || "hello";
+
+    console.log(`[Zee] Wake word detected, command: "${command}"`);
+    setAssistantActive(true);
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/assistant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command, context: transcriptContextRef.current }),
+      });
+      const data = await res.json();
+      console.log(`[Zee] Response: "${data.response}", Action:`, data.action);
+
+      // Speak the response
+      if (data.response) {
+        Speech.speak(data.response, { language: "en", rate: 1.1, pitch: 1.0 });
+      }
+
+      // Show as a special comment
+      pushComment({
+        id: `zee-${Date.now()}`,
+        user: "⚡ Zee",
+        text: data.response ?? "...",
+        avatar: "🤖",
+        isTranscript: false,
+      });
+
+      // Fire the action
+      if (data.action && data.action.type !== "none") {
+        onAssistantAction(data.action as AssistantAction);
+      }
+    } catch (err) {
+      console.warn("[Zee] Error:", err);
+    } finally {
+      setAssistantActive(false);
+    }
+  }, [pushComment, onAssistantAction]);
+
   // ── Video+audio chunk → Gemini transcribe + react ────────────────────────────
 
   const processChunk = useCallback(async (uri: string) => {
@@ -152,6 +225,13 @@ export default function LiveStreamScreen() {
           isTranscript: true,
         });
         transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
+
+        // Check for wake word — if detected, assistant handles this chunk, skip viewer reactions
+        if (WAKE_WORDS.test(transcript)) {
+          triggerAssistant(transcript);
+          setTranscribeStatus("");
+          return;
+        }
       }
 
       if (Array.isArray(data.comments)) pushCommentsWithDelay(data.comments);
@@ -321,8 +401,15 @@ export default function LiveStreamScreen() {
           </View>
         </View>
 
+        {/* Zee assistant banner */}
+        {assistantActive && (
+          <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
+            <Text style={styles.zeeText}>⚡ Zee is thinking…</Text>
+          </View>
+        )}
+
         {/* Transcribe status banner */}
-        {(isTranscribing || transcribeStatus.length > 0) && (
+        {!assistantActive && (isTranscribing || transcribeStatus.length > 0) && (
           <View style={styles.statusBanner} pointerEvents="none">
             <Text style={styles.statusText}>
               🗣 {transcribeStatus.length > 0 ? transcribeStatus : isRecordingRef.current ? "recording…" : "starting…"}
@@ -532,6 +619,8 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
   },
   statusText: { fontSize: 12, color: COLORS.accent, fontStyle: "italic" },
+  zeeBanner: { borderColor: "#facc1555", backgroundColor: "rgba(0,0,0,0.7)" },
+  zeeText: { fontSize: 13, color: "#facc15", fontWeight: "700" },
 
   // Permission
   permCenter: {
