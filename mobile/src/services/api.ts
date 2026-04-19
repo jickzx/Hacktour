@@ -159,3 +159,56 @@ export async function identifyOutfit(uri: string): Promise<OutfitItem[]> {
   if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
   return data.items as OutfitItem[];
 }
+
+// ── Inventory / Live Commerce ──────────────────────────────────────────────────
+
+export interface InventoryProduct {
+  id: string;
+  name: string;
+  createdAt: string;
+  mode: "order" | "bid" | "none";
+  orders: { commenter: string; quantity: number; timestamp: string }[];
+  bids: { commenter: string; amount: number; timestamp: string }[];
+  highestBid: number;
+}
+
+/** Snap a photo of a product, identify it with Gemini, assign it a short ID. */
+export async function identifyProduct(uri: string): Promise<InventoryProduct> {
+  const form = new FormData();
+  form.append("photo", { uri, name: `product-${Date.now()}.jpg`, type: "image/jpeg" } as any);
+  const res = await fetch(`${API_BASE}/api/identify-product`, { method: "POST", body: form });
+  const data = await safeJson(res);
+  if (!res.ok) throw new Error(data.error || `API error: ${res.status}`);
+  return data.product as InventoryProduct;
+}
+
+/** List all registered inventory products. */
+export async function listInventory(): Promise<InventoryProduct[]> {
+  const res = await fetch(`${API_BASE}/api/inventory`);
+  const data = await safeJson(res);
+  return data.products as InventoryProduct[];
+}
+
+/** Open or close ordering/bidding on a product. */
+export async function setInventoryMode(id: string, mode: "order" | "bid" | "none"): Promise<InventoryProduct> {
+  const res = await fetch(`${API_BASE}/api/inventory/${id}/mode`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  const data = await safeJson(res);
+  if (!res.ok) throw new Error(data.error || `API error: ${res.status}`);
+  return data.product as InventoryProduct;
+}
+
+/** Parse a raw chat comment for order/bid intent and record it server-side. */
+export async function parseCommentForOrder(text: string, commenter: string): Promise<{
+  matched: boolean; action?: "order" | "bid"; productId?: string; product?: InventoryProduct;
+}> {
+  const res = await fetch(`${API_BASE}/api/inventory/parse-comment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, commenter }),
+  });
+  return safeJson(res);
+}

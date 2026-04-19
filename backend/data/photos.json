@@ -34,5 +34,14 @@
     "createdAt": "2026-04-18T22:08:17.804Z",
     "sessionId": "session-1776550071083",
     "variant": "original"
+  },
+  {
+    "id": "e593f08b-8480-4263-acb8-2aa0d15cdd4a",
+    "filename": "e593f08b-8480-4263-acb8-2aa0d15cdd4a.jpg",
+    "url": "/api/photos/file/e593f08b-8480-4263-acb8-2aa0d15cdd4a.jpg",
+    "caption": "look up at the camera playfully",
+    "createdAt": "2026-04-19T08:26:01.642Z",
+    "sessionId": "session-1776587096577",
+    "variant": "original"
   }
 ]

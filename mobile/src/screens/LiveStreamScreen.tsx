@@ -31,7 +31,8 @@ import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
 import ProductOverlay from "../components/ProductOverlay";
-import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem, processEdit, poseCoach } from "../services/api";
+import ProductIdOverlay from "../components/ProductIdOverlay";
+import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem, processEdit, poseCoach, identifyProduct, setInventoryMode, parseCommentForOrder, InventoryProduct } from "../services/api";
 import { findProduct, ProductItem } from "../services/product";
 import { BACKEND_URL } from "../services/backendUrl";
 import { ensureHumanLikeVoice, getVoicePresetPatch, getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings, updateVoiceSettings } from "../services/voiceSettings";
@@ -181,6 +182,8 @@ const { height: SCREEN_H } = Dimensions.get("window");
 const PANDA_ALIASES = "p[ao]nd[ao]|p[ao]nt[ao]|b[ao]nd[ao]";
 const WAKE_WORDS = new RegExp(`\\b(?:${PANDA_ALIASES})\\b`, "i");
 const PANDA_STOP_RE = new RegExp(`\\b(?:${PANDA_ALIASES})\\s+stop\\b`, "i");
+// Matches the command part only — skips /api/assistant so "id this" feels instant.
+const IDENTIFY_PRODUCT_CMD_RE = /\b(id this|identify this(?:\s+product)?|add (?:this|it) to inventory|register this|what is this(?:\s+(?:product|item))?)\b/i;
 // Legacy keyword pre-filter — replaced by a Gemini 3.1 flash-lite classifier
 // in /api/assistant. Any phrase that follows the wake word is now routed to
 // the model for intent classification, so we don't need a hand-maintained
@@ -205,6 +208,7 @@ const PANDA_COMMANDS = [
   { cmd: "hey panda change your voice", desc: "Switch Panda's saved voice" },
   { cmd: "hey panda what am I wearing", desc: "Identify outfit + shop links" },
   { cmd: "hey panda pull up red nike air maxes", desc: "Show a product page on stream" },
+  { cmd: "hey panda id this", desc: "Identify product + add to inventory" },
 ];
 
 // Hard cap on pictures per "take photos of me" request
@@ -290,6 +294,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const activeClipRef = useRef<typeof activeClip>(null);
   const [activeProduct, setActiveProduct] = useState<(ProductItem & { mountKey: string }) | null>(null);
   const activeProductRef = useRef<typeof activeProduct>(null);
+  const [activeProductId, setActiveProductId] = useState<InventoryProduct | null>(null);
   activeClipRef.current = activeClip;
   activeProductRef.current = activeProduct;
   const [pandaLiveOn, setPandaLiveOn] = useState(false);
@@ -301,6 +306,8 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const pandaSpeechUntilRef = useRef(0);
   const lastPandaSpeechRef = useRef("");
   const lastPandaGreetingAtRef = useRef(0);
+  /** When ASR emits only "hey panda", the real command may arrive in the next chunk — merge within this window. */
+  const awaitingCommandRef = useRef<{ until: number } | null>(null);
   isLiveRef.current = isLive;
   activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
@@ -394,10 +401,25 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
   // ── Comments ─────────────────────────────────────────────────────────────────
 
+  const tryParseOrderBid = useCallback(async (text: string, commenter: string) => {
+    if (!text || commenter === "🎙 you (live)" || commenter.startsWith("🐼")) return;
+    try {
+      const result = await parseCommentForOrder(text, commenter);
+      if (result.matched && result.product) {
+        const label = result.action === "bid"
+          ? `💰 ${commenter} bid on ${result.product.name} (${result.productId})`
+          : `🛒 ${commenter} ordered ${result.product.name} (${result.productId})`;
+        pushComment({ id: `auto-${Date.now()}`, user: "📦 System", text: label, avatar: "📦" });
+      }
+    } catch {}
+  }, []); // eslint-disable-line
+
   const pushComment = useCallback((c: Comment) => {
     setComments((prev) => [...prev.slice(-80), c]);
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
-  }, []);
+    // Silently check if this comment is an order/bid instruction
+    if (!c.isTranscript) tryParseOrderBid(c.text, c.user);
+  }, [tryParseOrderBid]);
 
   const debugPanda = useCallback((message: string) => {
     const stamped = `${new Date().toLocaleTimeString()} ${message}`;
@@ -836,6 +858,7 @@ Rules:
         });
         break;
       case "identify_outfit": scanOutfit(); break;
+      case "identify_product": identifyProductCmd(); break;
       case "change_voice": handleVoiceChange(pendingAction); break;
     }
     onPendingActionConsumed();
@@ -844,6 +867,7 @@ Rules:
   // ── Assistant: detect wake word in transcript ─────────────────────────────────
 
   const triggerAssistant = useCallback(async (fullTranscript: string) => {
+    awaitingCommandRef.current = null;
     const match = fullTranscript.match(WAKE_WORDS);
     if (!match) return;
 
@@ -889,10 +913,23 @@ Rules:
       }
 
       if (!hasExplicitCommand) {
+        awaitingCommandRef.current = { until: Date.now() + 5000 };
         ensurePandaLive();
         setAssistantActive(false);
         return;
       }
+    }
+
+    if (!shouldRunActionAssistant) {
+      setAssistantActive(false);
+      return;
+    }
+
+    // Skip Gemini JSON classifier — one vision call on the backend instead of two LLM hops.
+    if (IDENTIFY_PRODUCT_CMD_RE.test(rawCommand)) {
+      onAssistantAction({ type: "identify_product" });
+      setAssistantActive(false);
+      return;
     }
 
     // Android path still needs a text-turn echo (audio never reaches Gemini).
@@ -900,11 +937,6 @@ Rules:
     // user input and confuse the model.
     if (hasExplicitCommand && !iosLive) {
       sendToPandaLive(rawCommand);
-    }
-
-    if (!shouldRunActionAssistant) {
-      setAssistantActive(false);
-      return;
     }
 
     try {
@@ -980,6 +1012,21 @@ Rules:
       return;
     }
 
+    // Second half of "hey panda" + "id this" when ASR splits the utterance.
+    if (
+      awaitingCommandRef.current &&
+      Date.now() < awaitingCommandRef.current.until &&
+      !WAKE_WORDS.test(transcript)
+    ) {
+      awaitingCommandRef.current = null;
+      console.log(`[Panda] Merged wake follow-up: "${transcript}"`);
+      console.log(`[Streamer] ${transcript}`);
+      pushComment({ id: `transcript-${Date.now()}`, user: "🎙 you (live)", text: transcript, avatar: "🎤", isTranscript: true });
+      transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
+      void triggerAssistant(`panda ${transcript}`);
+      return;
+    }
+
     console.log(`[Streamer] ${transcript}`);
     pushComment({ id: `transcript-${Date.now()}`, user: "🎙 you (live)", text: transcript, avatar: "🎤", isTranscript: true });
     transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
@@ -989,9 +1036,14 @@ Rules:
       return;
     }
 
-    // While Panda is already active, ignore repeated wake words entirely.
-    if (pandaLiveActiveRef.current && WAKE_WORDS.test(transcript)) {
-      console.log(`[Panda] Ignoring repeated wake word: ${transcript}`);
+    // Only drop bare "hey panda" repeats — never block "hey panda id this" style lines.
+    const wakeStripped = transcript
+      .replace(WAKE_WORDS, "")
+      .replace(/\b(hey|hi|ok|okay|yo|so|uh|um)\b/gi, " ")
+      .replace(/[^\w\s]/g, " ")
+      .trim();
+    if (pandaLiveActiveRef.current && WAKE_WORDS.test(transcript) && wakeStripped.length < 2) {
+      console.log(`[Panda] Ignoring bare wake duplicate: ${transcript}`);
       return;
     }
 
@@ -1422,6 +1474,49 @@ Rules:
     }
   }, [speak, pushComment]); // eslint-disable-line
 
+  // ── Product ID: "hey panda id this" ──────────────────────────────────────────
+
+  const identifyProductCmd = useCallback(async () => {
+    if (outfitBusyRef.current || photoSessionRef.current) return;
+    outfitBusyRef.current = true;
+
+    const wasVideoLooping = isVideoLoopRef.current;
+    isVideoLoopRef.current = false;
+    if (isRecordingRef.current && cameraRef.current) {
+      try { cameraRef.current.stopRecording(); } catch {}
+    }
+    await new Promise((r) => setTimeout(r, 200));
+
+    speak("Got it, identifying that product now.");
+    pushComment({ id: `pid-snap-${Date.now()}`, user: "🐼 Panda", text: "Snapping product…", avatar: "📦" });
+
+    try {
+      const pic = await cameraRef.current?.takePictureAsync({ quality: 0.55, skipProcessing: true });
+      if (!pic?.uri) throw new Error("no frame");
+
+      const product = await identifyProduct(pic.uri);
+      setActiveProductId(product);
+
+      speak(`Registered! Product ID is ${product.id.split("").join(" ")}. Tap order or bid to open it up.`);
+      pushComment({
+        id: `pid-ok-${Date.now()}`,
+        user: "📦 Panda",
+        text: `✅ ${product.name} — ID: ${product.id}`,
+        avatar: "📦",
+      });
+    } catch (err) {
+      console.warn("[ProductId] Error:", err);
+      speak("Couldn't identify that. Try again?");
+      pushComment({ id: `pid-err-${Date.now()}`, user: "📦 Panda", text: "Product scan failed — try again", avatar: "📦" });
+    } finally {
+      outfitBusyRef.current = false;
+      if (wasVideoLooping && isLiveRef.current && isTranscribingRef.current) {
+        isVideoLoopRef.current = true;
+        videoLoop();
+      }
+    }
+  }, [speak, pushComment]); // eslint-disable-line
+
   // ── Rolling 35s video buffer loop ────────────────────────────────────────────
   // Continuously records 35s chunks while live. The last completed chunk URI is
   // always available in lastVideoChunkUriRef so the clip button can grab it.
@@ -1780,6 +1875,27 @@ Rules:
             key={activeProduct.mountKey}
             item={activeProduct}
             onClose={() => setActiveProduct(null)}
+          />
+        )}
+
+        {activeProductId && (
+          <ProductIdOverlay
+            product={activeProductId}
+            onOpenOrder={async () => {
+              try {
+                await setInventoryMode(activeProductId.id, "order");
+                pushComment({ id: `pid-order-${Date.now()}`, user: "📦 Panda", text: `🛒 Orders open for ${activeProductId.name} (${activeProductId.id}) — type: order ${activeProductId.id}`, avatar: "📦" });
+                speak(`Orders are now open for ${activeProductId.name}. Type order ${activeProductId.id.split("").join(" ")} in chat.`);
+              } catch {}
+            }}
+            onOpenBid={async () => {
+              try {
+                await setInventoryMode(activeProductId.id, "bid");
+                pushComment({ id: `pid-bid-${Date.now()}`, user: "📦 Panda", text: `⚡ Bidding open for ${activeProductId.name} (${activeProductId.id}) — type: bid £50 ${activeProductId.id}`, avatar: "📦" });
+                speak(`Auction is live for ${activeProductId.name}. Bid in chat: bid, your amount, then ${activeProductId.id.split("").join(" ")}.`);
+              } catch {}
+            }}
+            onClose={() => setActiveProductId(null)}
           />
         )}
 

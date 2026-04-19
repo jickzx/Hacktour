@@ -10,28 +10,22 @@ import LiveStreamScreen from "./src/screens/LiveStreamScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import LibraryScreen from "./src/screens/LibraryScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
+import InventoryScreen from "./src/screens/InventoryScreen";
 import BottomNavBar, { Tab } from "./src/components/BottomNavBar";
 import { COLORS } from "./src/constants/theme";
 import { LanguageProvider } from "./src/context/LanguageContext";
 import { loadVoiceSettings } from "./src/services/voiceSettings";
 
 export type AssistantAction = {
-  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "create_poll" | "close_poll" | "emoji_mode" | "hype" | "shoutout" | "countdown" | "pull_up_clip" | "pull_up_product" | "clip" | "take_photos" | "identify_outfit" | "change_voice" | "none";
+  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "create_poll" | "close_poll" | "emoji_mode" | "hype" | "shoutout" | "countdown" | "pull_up_clip" | "pull_up_product" | "clip" | "take_photos" | "identify_outfit" | "identify_product" | "change_voice" | "none";
   tab?: Tab;
   poll?: { question: string; options: string[] };
-  /** for shoutout: the username to shout out */
   user?: string;
-  /** for countdown: seconds (default 5) */
   seconds?: number;
-  /** for pull_up_clip: search query extracted from voice command */
   query?: string;
-  /** for take_photos: optional pre-dictated poses (otherwise the live coach picks them) */
   poses?: string[];
-  /** for take_photos: how many shots to take (default 5, max 10) */
   count?: number;
-  /** for take_photos: true = auto-capture with countdown; false = ask "yes" before each shot */
   auto?: boolean;
-  /** for change_voice: preset and/or language */
   preset?: "default" | "chill" | "hype" | "deep" | "chipmunk";
   language?: string;
 };
@@ -73,6 +67,9 @@ export default function App() {
       </View>
       <View style={[styles.screen, activeTab !== "settings" && styles.hidden]}>
         <SettingsScreen />
+      </View>
+      <View style={[styles.screen, activeTab !== "inventory" && styles.hidden]}>
+        <InventoryScreen isFocused={activeTab === "inventory"} />
       </View>
 
       <BottomNavBar activeTab={activeTab} onTabPress={setActiveTab} />

@@ -19,6 +19,7 @@ import feedRouter from "./routes/feed";
 import photosRouter from "./routes/photos";
 import { GEMINI_MODELS, getGeminiModel } from "./services/modelConfig";
 import { lookupProduct } from "./services/productLookup";
+import { addProduct, getProduct, listProducts, setProductMode, placeOrder, placeBid } from "./services/inventoryStore";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -503,6 +504,7 @@ Action types:
 - clip — save a clip of the current live moment to the library
 - take_photos → include "count":<number of shots, default 5, max 10> and "auto":<true|false — true only if the streamer clearly said "automatically" / "auto" / "without asking" / "on your own">. Pose ideas come from the live vision coach, not this payload, so you do not need to list poses yourself unless the streamer specifically dictated them — only then include "poses":[…].
 - identify_outfit → no extra fields
+- identify_product → no extra fields — streamer says "id this", "identify this product", "add this to inventory", "what is this", "panda id this"
 - change_voice → include any useful combination of:
   - "preset":"default"|"chill"|"hype"|"deep"|"chipmunk"
   - "language":"en-US"|"en-GB"|"en-AU"|"es-ES"|"fr-FR"|"de-DE"|"ja-JP"
@@ -510,6 +512,7 @@ Action types:
 
 If the streamer says anything like "take pictures of me", "take my photo", "photo shoot", "snap me", use take_photos. Pick a sensible count (1-10; default 5 if unspecified). Set auto=true only when the streamer explicitly asks for automatic / hands-free capture (e.g. "take 5 pictures automatically", "just go for it"); otherwise auto=false so Panda asks before each shot.
 If the streamer says anything like "what am I wearing", "rate my fit", "find my outfit", "where can I buy this", "link my clothes", "what's this shirt", use identify_outfit.
+If the streamer says anything like "id this", "identify this", "panda id this", "add this to inventory", "what is this product", "register this item", use identify_product.
 If the streamer asks to change Panda's voice, accent, speed, pitch, or vibe, use change_voice.
 Use preset="chill" for softer/slower voice requests, preset="hype" for energetic/faster voice requests, preset="deep" for lower pitch requests, preset="chipmunk" for very high pitch requests, and language for accent/language requests.
 If you detect the streamer is asking chat to choose between things, use create_poll automatically.
@@ -584,6 +587,132 @@ If any comments look toxic/spammy, set modAlert to a short warning string instea
     console.error("[Copilot] Error:", err);
     res.status(500).json({ error: "Copilot failed" });
   }
+});
+
+/**
+ * POST /api/identify-product
+ * multipart/form-data: { photo: image }
+ * Returns: { product: InventoryProduct }
+ * Uses Gemini vision to name the product, assigns a short ID, saves to inventory.
+ */
+app.post("/api/identify-product", upload.single("photo"), async (req, res) => {
+  if (!req.file) { res.status(400).json({ error: "No photo" }); return; }
+  const filePath = req.file.path;
+  try {
+    const base64 = fs.readFileSync(filePath).toString("base64");
+    const mimeType = req.file.mimetype || "image/jpeg";
+
+    const result = await getGeminiModel("defaultText").generateContent([
+      { inlineData: { mimeType, data: base64 } },
+      `You are a product identification assistant for a live commerce stream.
+Look at this image and identify the main product being shown.
+Return ONLY a JSON object, no markdown:
+{"name":"short product name (2-5 words, e.g. Red Nike Air Max)","category":"clothing|footwear|electronics|food|accessory|other"}
+Keep the name concise and suitable to display as an auction/order item on stream.`,
+    ]);
+    const raw = result.response.text().trim();
+    const match = raw.match(/\{[\s\S]*\}/);
+    let parsed: { name?: string; category?: string } = {};
+    try { parsed = JSON.parse(match?.[0] ?? "{}"); } catch {}
+
+    const name = String(parsed.name ?? "Mystery Item").trim().slice(0, 60);
+    const product = addProduct(name, base64);
+    console.log(`[Inventory] Identified: "${name}" id=${product.id}`);
+    // Never send multi‑MB base64 to the app — it slows JSON parse and blocks the UI thread.
+    const { photoBase64: _omitPhoto, ...productOut } = product;
+    res.json({ product: productOut });
+  } catch (err) {
+    console.error("[Inventory] identify error:", err);
+    res.status(500).json({ error: String(err) });
+  } finally {
+    try { fs.unlinkSync(filePath); } catch {}
+  }
+});
+
+/**
+ * GET /api/inventory
+ * Returns all inventory products (newest first, no photo blobs).
+ */
+app.get("/api/inventory", (_req, res) => {
+  const products = listProducts().map(({ photoBase64: _p, ...rest }) => rest);
+  res.json({ products });
+});
+
+/**
+ * PATCH /api/inventory/:id/mode
+ * Body: { mode: "order" | "bid" | "none" }
+ * Streamer opens or closes ordering/bidding for a product.
+ */
+app.patch("/api/inventory/:id/mode", express.json(), (req, res) => {
+  const { id } = req.params;
+  const { mode } = req.body as { mode?: "order" | "bid" | "none" };
+  if (!mode) { res.status(400).json({ error: "Missing mode" }); return; }
+  const product = setProductMode(id, mode);
+  if (!product) { res.status(404).json({ error: "Product not found" }); return; }
+  console.log(`[Inventory] ${id} mode=${mode}`);
+  res.json({ product });
+});
+
+/**
+ * POST /api/inventory/:id/order
+ * Body: { commenter: string, quantity?: number }
+ * Viewer places an order via chat comment parsing.
+ */
+app.post("/api/inventory/:id/order", express.json(), (req, res) => {
+  const { id } = req.params;
+  const { commenter, quantity = 1 } = req.body as { commenter?: string; quantity?: number };
+  if (!commenter) { res.status(400).json({ error: "Missing commenter" }); return; }
+  const product = placeOrder(id, commenter, quantity);
+  if (!product) { res.status(404).json({ error: "Product not found or not in order mode" }); return; }
+  console.log(`[Inventory] order: ${commenter} x${quantity} → ${id}`);
+  res.json({ product });
+});
+
+/**
+ * POST /api/inventory/:id/bid
+ * Body: { commenter: string, amount: number }
+ * Viewer places a bid.
+ */
+app.post("/api/inventory/:id/bid", express.json(), (req, res) => {
+  const { id } = req.params;
+  const { commenter, amount } = req.body as { commenter?: string; amount?: number };
+  if (!commenter || !amount) { res.status(400).json({ error: "Missing commenter or amount" }); return; }
+  const product = placeBid(id, commenter, amount);
+  if (!product) { res.status(404).json({ error: "Product not found, not in bid mode, or bid too low" }); return; }
+  console.log(`[Inventory] bid: ${commenter} £${amount} → ${id}`);
+  res.json({ product });
+});
+
+/**
+ * POST /api/inventory/parse-comment
+ * Body: { text: string, commenter: string }
+ * Parses a chat comment for order/bid intent and records it if valid.
+ * Returns: { matched: boolean, action?: "order"|"bid", productId?, product? }
+ */
+app.post("/api/inventory/parse-comment", express.json(), (req, res) => {
+  const { text, commenter } = req.body as { text?: string; commenter?: string };
+  if (!text || !commenter) { res.json({ matched: false }); return; }
+
+  const t = text.trim().toLowerCase();
+
+  // Order: "order AB12" / "buy AB12" / "I want AB12" / "AB12 order"
+  const orderMatch = t.match(/\b(?:order|buy|want|get)\s+([a-z0-9]{4})\b|\b([a-z0-9]{4})\s+(?:order|buy)\b/i);
+  if (orderMatch) {
+    const productId = (orderMatch[1] ?? orderMatch[2]).toUpperCase();
+    const product = placeOrder(productId, commenter);
+    if (product) { res.json({ matched: true, action: "order", productId, product }); return; }
+  }
+
+  // Bid: "bid 50 AB12" / "AB12 50" / "£50 AB12" / "50 AB12"
+  const bidMatch = t.match(/\b(?:bid\s+)?[£$]?(\d+(?:\.\d+)?)\s+([a-z0-9]{4})\b|\b([a-z0-9]{4})\s+[£$]?(\d+(?:\.\d+)?)\b/i);
+  if (bidMatch) {
+    const amount = parseFloat(bidMatch[1] ?? bidMatch[4]);
+    const productId = (bidMatch[2] ?? bidMatch[3]).toUpperCase();
+    const product = placeBid(productId, commenter, amount);
+    if (product) { res.json({ matched: true, action: "bid", productId, amount, product }); return; }
+  }
+
+  res.json({ matched: false });
 });
 
 const server = http.createServer(app);
