@@ -17,9 +17,11 @@ import {
   SafeAreaView,
 } from "react-native";
 import { useVideoPlayer, VideoView } from "expo-video";
+import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS, SHADOWS } from "../constants/theme";
 import ClipCard from "../components/ClipCard";
 import { listClips, searchClips, listPhotos, photoUrl, Photo } from "../services/api";
+import { useLanguage } from "../context/LanguageContext";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const CARD_WIDTH = (SCREEN_WIDTH - SPACING.lg * 2 - SPACING.md) / 2;
@@ -38,6 +40,7 @@ interface Clip {
 type Section = "clips" | "images";
 
 export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
+  const { t } = useLanguage();
   const [section, setSection] = useState<Section>("clips");
 
   const [clips, setClips] = useState<Clip[]>([]);
@@ -122,11 +125,11 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
     <View style={styles.root}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7}>
-          <Text style={styles.iconText}>☰</Text>
+          <Ionicons name="menu" size={24} color={COLORS.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Library</Text>
+        <Text style={styles.headerTitle}>{t("libraryTitle")}</Text>
         <TouchableOpacity style={styles.iconBtn} activeOpacity={0.7}>
-          <Text style={styles.iconText}>⌕</Text>
+          <Ionicons name="search" size={22} color={COLORS.text} />
         </TouchableOpacity>
       </View>
 
@@ -141,7 +144,7 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
               activeOpacity={0.7}
             >
               <Text style={[styles.pillTabText, active && styles.pillTabTextActive]}>
-                {s === "clips" ? "🎬 Clips" : "🖼 Images"}
+                {s === "clips" ? `🎬 ${t("clips")}` : `🖼 ${t("photos")}`}
               </Text>
             </TouchableOpacity>
           );
@@ -182,7 +185,7 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
                 <Text style={styles.searchIcon}>🔍</Text>
                 <TextInput
                   style={styles.searchInput}
-                  placeholder="Search clips…"
+                  placeholder={t("searchClips")}
                   placeholderTextColor={COLORS.textMuted}
                   value={search}
                   onChangeText={onSearchChange}
@@ -197,10 +200,8 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>🎬</Text>
-              <Text style={styles.emptyTitle}>No clips yet</Text>
-              <Text style={styles.emptySubtitle}>
-                Generate an edit to save your first clip
-              </Text>
+              <Text style={styles.emptyTitle}>{t("noClipsTitle")}</Text>
+              <Text style={styles.emptySubtitle}>{t("noClipsSubtitle")}</Text>
             </View>
           }
           renderItem={({ item }) => (
@@ -241,11 +242,9 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
           }
           ListEmptyComponent={
             <View style={styles.empty}>
-              <Text style={styles.emptyEmoji}>📸</Text>
-              <Text style={styles.emptyTitle}>No photos yet</Text>
-              <Text style={styles.emptySubtitle}>
-                Say "Panda, take my photo" on the live tab
-              </Text>
+              <Ionicons name="images-outline" size={40} color={COLORS.textMuted} style={{ marginBottom: SPACING.md }} />
+              <Text style={styles.emptyTitle}>{t("noPhotosTitle")}</Text>
+              <Text style={styles.emptySubtitle}>{t("noPhotosSubtitle")}</Text>
             </View>
           }
           renderItem={({ item }) => {
@@ -264,9 +263,16 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
                       isEdited ? styles.variantBadgeEdited : styles.variantBadgeOriginal,
                     ]}
                   >
-                    <Text style={styles.variantBadgeText}>
-                      {isEdited ? "✨ cinematic" : "📷 original"}
-                    </Text>
+                    <View style={styles.variantBadgeInner}>
+                      <Ionicons
+                        name={isEdited ? "sparkles" : "camera"}
+                        size={10}
+                        color="#FFFFFF"
+                      />
+                      <Text style={styles.variantBadgeText}>
+                        {isEdited ? "cinematic" : "original"}
+                      </Text>
+                    </View>
                   </View>
                 </View>
                 <View style={styles.photoMeta}>
@@ -313,14 +319,14 @@ function ClipPlayerModal({
             {clip.title}
           </Text>
           <TouchableOpacity style={modalStyles.closeBtn} onPress={onClose} activeOpacity={0.7}>
-            <Text style={modalStyles.closeText}>✕</Text>
+            <Ionicons name="close" size={22} color={COLORS.text} />
           </TouchableOpacity>
         </View>
         {videoUrl ? (
           <VideoView player={player} style={modalStyles.video} contentFit="contain" nativeControls />
         ) : (
           <View style={modalStyles.noVideo}>
-            <Text style={modalStyles.noVideoEmoji}>🎥</Text>
+            <Ionicons name="videocam-off-outline" size={44} color={COLORS.textMuted} style={{ marginBottom: SPACING.md }} />
             <Text style={modalStyles.noVideoText}>No video available</Text>
           </View>
         )}
@@ -589,6 +595,11 @@ const styles = StyleSheet.create({
   variantBadgeEdited: {
     backgroundColor: COLORS.primary,
     ...SHADOWS.fab,
+  },
+  variantBadgeInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
   },
   variantBadgeText: {
     fontSize: FONT_SIZES.xs,

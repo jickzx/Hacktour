@@ -2,6 +2,7 @@
  * ClipCard — XHS-style post card for a saved clip.
  */
 import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS, SHADOWS } from "../constants/theme";
 
 const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
@@ -51,7 +52,7 @@ export default function ClipCard({
         ) : null}
         <View style={styles.playOverlay}>
           <View style={styles.playCircle}>
-            <Text style={styles.playIcon}>▶</Text>
+            <Ionicons name="play" size={18} color="#FFFFFF" style={{ marginLeft: 2 }} />
           </View>
         </View>
         <View style={styles.durationBadge}>

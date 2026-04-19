@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import * as Speech from "expo-speech";
 import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS } from "../constants/theme";
 import {
   DEFAULT_VOICE_SETTINGS,
@@ -19,18 +20,26 @@ import {
   VoiceSettings,
   VOICE_PRESETS,
 } from "../services/voiceSettings";
-
-const LANGUAGES: { code: string; label: string }[] = [
-  { code: "en-US", label: "English (US)" },
-  { code: "en-GB", label: "English (UK)" },
-  { code: "en-AU", label: "English (AU)" },
-  { code: "es-ES", label: "Spanish" },
-  { code: "fr-FR", label: "French" },
-  { code: "de-DE", label: "German" },
-  { code: "ja-JP", label: "Japanese" },
-];
+import { useLanguage } from "../context/LanguageContext";
 
 export default function SettingsScreen() {
+  const { t } = useLanguage();
+  const LANGUAGES = [
+    { code: "en-US", label: t("langEnUS") },
+    { code: "en-GB", label: t("langEnGB") },
+    { code: "en-AU", label: t("langEnAU") },
+    { code: "es-ES", label: t("langEs") },
+    { code: "fr-FR", label: t("langFr") },
+    { code: "de-DE", label: t("langDe") },
+    { code: "ja-JP", label: t("langJa") },
+  ];
+  const PRESET_LABELS: Record<string, string> = {
+    "Default": t("presetDefault"),
+    "Chill": t("presetChill"),
+    "Hype": t("presetHype"),
+    "Deep": t("presetDeep"),
+    "Chipmunk": t("presetChipmunk"),
+  };
   const [settings, setSettings] = useState<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
   const [voices, setVoices] = useState<Speech.Voice[]>([]);
 
@@ -105,14 +114,14 @@ export default function SettingsScreen() {
               end={{ x: 1, y: 0 }}
               style={s.logoBar}
             />
-            <Text style={s.brand}>Settings</Text>
-            <Text style={s.tagline}>Gemini Voice</Text>
+            <Text style={s.brand}>{t("settingsTitle")}</Text>
+            <Text style={s.tagline}>{t("geminiVoice")}</Text>
           </LinearGradient>
         </View>
 
         {/* ── Presets ── */}
         <View style={s.card}>
-          <Text style={s.cardTitle}>Presets</Text>
+          <Text style={s.cardTitle}>{t("presets")}</Text>
           <View style={s.chipWrap}>
             {VOICE_PRESETS.map((p) => (
               <TouchableOpacity
@@ -127,7 +136,7 @@ export default function SettingsScreen() {
                   end={{ x: 1, y: 0 }}
                   style={s.presetGrad}
                 >
-                  <Text style={s.presetText}>{p.label}</Text>
+                  <Text style={s.presetText}>{PRESET_LABELS[p.label] ?? p.label}</Text>
                 </LinearGradient>
               </TouchableOpacity>
             ))}
@@ -136,15 +145,15 @@ export default function SettingsScreen() {
 
         {/* ── Speech ── */}
         <View style={s.card}>
-          <Text style={s.cardTitle}>Speech</Text>
-          {stepper("Rate", settings.rate, 0.5, 2.0, 0.05, (v) => patch({ rate: v }))}
+          <Text style={s.cardTitle}>{t("speech")}</Text>
+          {stepper(t("rate"), settings.rate, 0.5, 2.0, 0.05, (v) => patch({ rate: v }))}
           <View style={s.divider} />
-          {stepper("Pitch", settings.pitch, 0.5, 2.0, 0.05, (v) => patch({ pitch: v }))}
+          {stepper(t("pitch"), settings.pitch, 0.5, 2.0, 0.05, (v) => patch({ pitch: v }))}
         </View>
 
         {/* ── Language ── */}
         <View style={s.card}>
-          <Text style={s.cardTitle}>Language</Text>
+          <Text style={s.cardTitle}>{t("voiceLanguage")}</Text>
           <View style={s.chipWrap}>
             {LANGUAGES.map((l) => {
               const active = settings.language === l.code;
@@ -173,7 +182,7 @@ export default function SettingsScreen() {
         {/* ── Voice ── */}
         {voiceOptions.length > 0 && (
           <View style={s.card}>
-            <Text style={s.cardTitle}>Voice</Text>
+            <Text style={s.cardTitle}>{t("voice")}</Text>
             <View style={s.chipWrap}>
               <TouchableOpacity
                 style={[s.chip, !settings.voiceId && s.chipActive]}
@@ -188,7 +197,7 @@ export default function SettingsScreen() {
                     style={StyleSheet.absoluteFill}
                   />
                 )}
-                <Text style={[s.chipText, !settings.voiceId && s.chipTextActive]}>System default</Text>
+                <Text style={[s.chipText, !settings.voiceId && s.chipTextActive]}>{t("systemDefault")}</Text>
               </TouchableOpacity>
               {voiceOptions.map((v) => {
                 const active = settings.voiceId === v.identifier;
@@ -225,8 +234,8 @@ export default function SettingsScreen() {
             end={{ x: 1, y: 0.5 }}
             style={s.previewGrad}
           >
-            <Text style={s.previewIcon}>▶</Text>
-            <Text style={s.previewText}>Preview Voice</Text>
+            <Ionicons name="play" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+            <Text style={s.previewText}>{t("previewVoice")}</Text>
           </LinearGradient>
         </TouchableOpacity>
 
@@ -236,7 +245,7 @@ export default function SettingsScreen() {
           onPress={() => patch(DEFAULT_VOICE_SETTINGS)}
           activeOpacity={0.7}
         >
-          <Text style={s.resetText}>Reset to defaults</Text>
+          <Text style={s.resetText}>{t("resetDefaults")}</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>

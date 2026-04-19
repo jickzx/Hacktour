@@ -2,8 +2,10 @@
  * BottomNavBar — XHS-style 5-slot tab bar with elevated FAB.
  * Slots: Home | Library | [Live FAB] | Edit | Profile
  */
+import { Ionicons } from "@expo/vector-icons";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { COLORS, RADII, SPACING, WEIGHTS, SHADOWS, SAFE_BOTTOM } from "../constants/theme";
+import { useLanguage, TranslationKey } from "../context/LanguageContext";
 
 export type Tab = "home" | "library" | "edit" | "live" | "settings";
 
@@ -12,22 +14,25 @@ interface BottomNavBarProps {
   onTabPress: (tab: Tab) => void;
 }
 
-const TABS: { tab: Tab; icon: string; label: string }[] = [
-  { tab: "home", icon: "⌂", label: "Home" },
-  { tab: "library", icon: "▦", label: "Library" },
-  { tab: "edit", icon: "✂", label: "Edit" },
-  { tab: "settings", icon: "◔", label: "Profile" },
+type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
+
+const TABS: { tab: Tab; icon: IoniconName; iconActive: IoniconName; labelKey: TranslationKey }[] = [
+  { tab: "home",     icon: "home-outline",    iconActive: "home",    labelKey: "home" },
+  { tab: "library",  icon: "albums-outline",  iconActive: "albums",  labelKey: "library" },
+  { tab: "edit",     icon: "cut-outline",     iconActive: "cut",     labelKey: "edit" },
+  { tab: "settings", icon: "person-outline",  iconActive: "person",  labelKey: "profile" },
 ];
 
 export default function BottomNavBar({ activeTab, onTabPress }: BottomNavBarProps) {
+  const { t } = useLanguage();
   return (
     <View style={styles.wrap} pointerEvents="box-none">
       <View style={styles.bar}>
-        {TABS.slice(0, 2).map(({ tab, icon, label }) => (
+        {TABS.slice(0, 2).map(({ tab, icon, iconActive, labelKey }) => (
           <NavItem
             key={tab}
-            icon={icon}
-            label={label}
+            icon={activeTab === tab ? iconActive : icon}
+            label={t(labelKey)}
             active={activeTab === tab}
             onPress={() => onTabPress(tab)}
           />
@@ -38,14 +43,14 @@ export default function BottomNavBar({ activeTab, onTabPress }: BottomNavBarProp
           onPress={() => onTabPress("live")}
           activeOpacity={0.85}
         >
-          <Text style={styles.fabIcon}>+</Text>
+          <Ionicons name="add" size={30} color="#FFFFFF" />
         </TouchableOpacity>
 
-        {TABS.slice(2).map(({ tab, icon, label }) => (
+        {TABS.slice(2).map(({ tab, icon, iconActive, labelKey }) => (
           <NavItem
             key={tab}
-            icon={icon}
-            label={label}
+            icon={activeTab === tab ? iconActive : icon}
+            label={t(labelKey)}
             active={activeTab === tab}
             onPress={() => onTabPress(tab)}
           />
@@ -58,11 +63,11 @@ export default function BottomNavBar({ activeTab, onTabPress }: BottomNavBarProp
 function NavItem({
   icon, label, active, onPress,
 }: {
-  icon: string; label: string; active: boolean; onPress: () => void;
+  icon: IoniconName; label: string; active: boolean; onPress: () => void;
 }) {
   return (
     <TouchableOpacity style={styles.tab} onPress={onPress} activeOpacity={0.7}>
-      <Text style={[styles.icon, active && styles.iconActive]}>{icon}</Text>
+      <Ionicons name={icon} size={22} color={active ? COLORS.text : COLORS.textMuted} />
       <Text style={[styles.label, active && styles.labelActive]}>{label}</Text>
     </TouchableOpacity>
   );

@@ -18,9 +18,16 @@ LT_LOG=""
 
 get_lan_ip() {
   local ip
-  ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '!/docker|br-/ { split($4, parts, "/"); print parts[1]; exit }')
-  if [ -z "$ip" ]; then
-    ip=$(ip -4 -o addr show scope global 2>/dev/null | awk 'NR==1 { split($4, parts, "/"); print parts[1] }')
+  if command -v ip >/dev/null 2>&1; then
+    # Linux
+    ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '!/docker|br-/ { split($4, parts, "/"); print parts[1]; exit }')
+    [ -z "$ip" ] && ip=$(ip -4 -o addr show scope global 2>/dev/null | awk 'NR==1 { split($4, parts, "/"); print parts[1] }')
+  else
+    # macOS — try common interfaces in order
+    for iface in en0 en1 en2 en3; do
+      ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
+      [ -n "$ip" ] && break
+    done
   fi
   printf '%s' "$ip"
 }
@@ -38,14 +45,16 @@ trap cleanup INT TERM EXIT
 
 check_port() {
   local port=$1 label=$2
-  if ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN; then
-    echo "[start] port $port ($label) is already in use."
-    if fuser -k "$port/tcp" 2>/dev/null; then
+  local pid
+  pid=$(lsof -ti "tcp:$port" 2>/dev/null | head -1)
+  if [ -n "$pid" ]; then
+    echo "[start] port $port ($label) is already in use (pid $pid)."
+    if kill "$pid" 2>/dev/null; then
       echo "[start]   → killed previous listener."
       sleep 1
     else
       echo "[start]   → couldn't free it (likely owned by another user)."
-      echo "[start]     run:  sudo fuser -k $port/tcp"
+      echo "[start]     run:  sudo lsof -ti tcp:$port | xargs kill -9"
       exit 1
     fi
   fi

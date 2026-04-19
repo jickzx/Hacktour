@@ -12,6 +12,7 @@ import LibraryScreen from "./src/screens/LibraryScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import BottomNavBar, { Tab } from "./src/components/BottomNavBar";
 import { COLORS } from "./src/constants/theme";
+import { LanguageProvider } from "./src/context/LanguageContext";
 import { loadVoiceSettings } from "./src/services/voiceSettings";
 
 export type AssistantAction = {
@@ -46,6 +47,7 @@ export default function App() {
   }, []);
 
   return (
+    <LanguageProvider>
     <View style={styles.root}>
       <StatusBar style="light" />
 
@@ -71,6 +73,7 @@ export default function App() {
 
       <BottomNavBar activeTab={activeTab} onTabPress={setActiveTab} />
     </View>
+    </LanguageProvider>
   );
 }
 

@@ -14,13 +14,16 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS, SHADOWS } from "../constants/theme";
 import { listClips } from "../services/api";
+import { useLanguage } from "../context/LanguageContext";
+import LanguageSheet from "../components/LanguageSheet";
 
 const TOP_TABS = ["Following", "Explore", "Nearby"] as const;
 type TopTab = (typeof TOP_TABS)[number];
 
-const CATEGORIES = ["For You", "Video", "Live", "Career", "Cars"] as const;
+const CATEGORIES_EN = ["For You", "Video", "Live", "Career", "Cars"] as const;
 
 interface Post {
   id: string;
@@ -66,19 +69,10 @@ const PALETTE: [string, string][] = [
 
 const STATIC_POSTS: Post[] = [
   {
-    id: "f1", title: "🇬🇧 伦敦😌市中心 £19.9 无限日料自助",
-    author: "伦敦食记与小动物", likes: 401, ratio: 1.4,
-    tintA: "#5C3D2E", tintB: "#3A1F0F", isVideo: true,
-    gradientCard: {
-      topColor: "#1A0F08", bottomColor: "#4A2010",
-      label: "🇬🇧 伦敦探店", mainText: "£19.9\n随便吃\n日料自助 🍣", textColor: "#FFD580",
-    },
-  },
-  {
-    id: "f2", title: "4月可是 SummerIntern 捡漏黄金期！",
-    author: "是个上岸栗子", likes: 21, ratio: 1.334,
-    tintA: "#B8D4E8", tintB: "#A0C4E0",
-    imageSource: require("../../assets/posts/summerintern.png"),
+    id: "f10", title: "求求了😭香港中学真的不是你想进就能进！",
+    author: "欣益妈国际教育说", likes: 236, ratio: 1.339,
+    tintA: "#E8D4D4", tintB: "#C8A0A0",
+    imageSource: require("../../assets/posts/hk-school.png"),
   },
   {
     id: "f3", title: "claude code 的团队模式真的赶快用！！！",
@@ -87,21 +81,10 @@ const STATIC_POSTS: Post[] = [
     imageSource: require("../../assets/posts/claude-code.png"),
   },
   {
-    id: "f4", title: "一眼认出🇭🇰香港男生❗揭秘3个超明显特征！",
-    author: "钓仔沪上飘", likes: 1837, ratio: 1.45,
-    tintA: "#C84820", tintB: "#801A00", isVideo: true,
-    gradientCard: {
-      topColor: "#0D0500", bottomColor: "#7A2008",
-      label: "🇭🇰 香港人", mainText: "香港男生\n为什么\n一眼就认出？", textColor: "#FFE080",
-    },
-  },
-  {
-    id: "f5", title: "rag 已死", author: "李洛克", likes: 1489, ratio: 1.05,
-    tintA: "#F8D0D0", tintB: "#E8A0A0",
-    textCard: {
-      bg: "#FFF0F0", textColor: "#8B2020",
-      secondaryText: "MAR.31", cardText: "我宣布，\nRAG 已死\n😤",
-    },
+    id: "f8", title: "上海 00后 UCL 海归情侣 今天身价多少钱",
+    author: "拜托了姐妹", likes: 1492, ratio: 1.355,
+    tintA: "#E8D4C0", tintB: "#C4A882", isVideo: true,
+    imageSource: require("../../assets/posts/ucl-couple.png"),
   },
   {
     id: "f6", title: "Title 越短，越大佬", author: "3 Sigma IBD...", likes: 2556, ratio: 1.25,
@@ -112,16 +95,16 @@ const STATIC_POSTS: Post[] = [
     },
   },
   {
+    id: "f2", title: "4月可是 SummerIntern 捡漏黄金期！",
+    author: "是个上岸栗子", likes: 21, ratio: 1.334,
+    tintA: "#B8D4E8", tintB: "#A0C4E0",
+    imageSource: require("../../assets/posts/summerintern.png"),
+  },
+  {
     id: "f7", title: "手抓拉塞尔F1真车 | 帝国理工造赛车年 vlog",
     author: "艾仔壳", likes: 4893, ratio: 1.323,
     tintA: "#1A3050", tintB: "#0A1828", isVideo: true,
     imageSource: require("../../assets/posts/imperial-f1.png"),
-  },
-  {
-    id: "f8", title: "上海 00后 UCL 海归情侣 今天身价多少钱",
-    author: "拜托了姐妹", likes: 1492, ratio: 1.355,
-    tintA: "#E8D4C0", tintB: "#C4A882", isVideo: true,
-    imageSource: require("../../assets/posts/ucl-couple.png"),
   },
   {
     id: "f9", title: "Cambridge · Harvard · Yale 大佬背景大赏",
@@ -130,10 +113,12 @@ const STATIC_POSTS: Post[] = [
     imageSource: require("../../assets/posts/linkedin-dalao.png"),
   },
   {
-    id: "f10", title: "求求了😭香港中学真的不是你想进就能进！",
-    author: "欣益妈国际教育说", likes: 236, ratio: 1.339,
-    tintA: "#E8D4D4", tintB: "#C8A0A0",
-    imageSource: require("../../assets/posts/hk-school.png"),
+    id: "f5", title: "rag 已死", author: "李洛克", likes: 1489, ratio: 1.05,
+    tintA: "#F8D0D0", tintB: "#E8A0A0",
+    textCard: {
+      bg: "#FFF0F0", textColor: "#8B2020",
+      secondaryText: "MAR.31", cardText: "我宣布，\nRAG 已死\n😤",
+    },
   },
   {
     id: "f11", title: "剑桥 IC offer holder 被 UCL 拒绝",
@@ -152,7 +137,7 @@ const STATIC_POSTS: Post[] = [
     author: "港漂打工人", likes: 892, ratio: 1.312,
     tintA: "#C8D8E8", tintB: "#98B8D8",
     imageSource: require("../../assets/posts/goldman-question.png"),
-  },
+  }
 ];
 
 function clipToPost(clip: ApiClip): Post {
@@ -165,8 +150,16 @@ function clipToPost(clip: ApiClip): Post {
 }
 
 export default function HomeScreen() {
+  const { t } = useLanguage();
+  const TAB_LABELS: Record<string, string> = {
+    "Following": t("following"),
+    "Explore": t("explore"),
+    "Nearby": t("nearby"),
+  };
+  const [langSheetOpen, setLangSheetOpen] = useState(false);
   const [topTab, setTopTab] = useState<TopTab>("Explore");
   const [category, setCategory] = useState<string>("For You");
+  const CATEGORIES = [t("forYou"), t("video"), t("live"), t("career"), t("cars")];
   const [clipPosts, setClipPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -207,21 +200,22 @@ export default function HomeScreen() {
   }, [allPosts]);
 
   return (
-    <View style={styles.root}>
+    <>
+      <View style={styles.root}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.iconBtn}>
-          <Text style={styles.menuIcon}>☰</Text>
+        <TouchableOpacity style={styles.iconBtn} onPress={() => setLangSheetOpen(true)}>
+          <Ionicons name="menu" size={24} color={COLORS.text} />
         </TouchableOpacity>
         <View style={styles.tabRow}>
-          {TOP_TABS.map((t) => (
-            <TouchableOpacity key={t} onPress={() => setTopTab(t)} style={styles.tabBtn}>
-              <Text style={[styles.tabText, topTab === t && styles.tabTextActive]}>{t}</Text>
-              {topTab === t && <View style={styles.tabUnderline} />}
+          {TOP_TABS.map((tab) => (
+            <TouchableOpacity key={tab} onPress={() => setTopTab(tab)} style={styles.tabBtn}>
+              <Text style={[styles.tabText, topTab === tab && styles.tabTextActive]}>{TAB_LABELS[tab]}</Text>
+              {topTab === tab && <View style={styles.tabUnderline} />}
             </TouchableOpacity>
           ))}
         </View>
         <TouchableOpacity style={styles.iconBtn}>
-          <Text style={styles.searchIcon}>⌕</Text>
+          <Ionicons name="search" size={22} color={COLORS.text} />
         </TouchableOpacity>
       </View>
 
@@ -265,7 +259,9 @@ export default function HomeScreen() {
           <View style={styles.col}>{rightCol.map((p) => <PostCard key={p.id} post={p} />)}</View>
         </View>
       </ScrollView>
-    </View>
+      </View>
+      <LanguageSheet visible={langSheetOpen} onClose={() => setLangSheetOpen(false)} />
+    </>
   );
 }
 
@@ -322,7 +318,7 @@ function PostCard({ post }: { post: Post }) {
         )}
         {post.isVideo && (
           <View style={styles.playBtn}>
-            <Text style={styles.playIcon}>▶</Text>
+            <Ionicons name="play" size={14} color="#FFFFFF" />
           </View>
         )}
       </View>
@@ -332,9 +328,12 @@ function PostCard({ post }: { post: Post }) {
         <View style={styles.cardMeta}>
           <View style={[styles.avatar, post.isClip && styles.avatarClip]} />
           <Text style={styles.cardAuthor} numberOfLines={1}>{post.author}</Text>
-          <Text style={[styles.cardLike, post.isClip && styles.cardLikeClip]}>
-            ♡ {fmtLikes(post.likes)}
-          </Text>
+          <View style={styles.cardLikeWrap}>
+            <Ionicons name="heart-outline" size={13} color={post.isClip ? COLORS.primary : COLORS.textMuted} />
+            <Text style={[styles.cardLike, post.isClip && styles.cardLikeClip]}>
+              {fmtLikes(post.likes)}
+            </Text>
+          </View>
         </View>
       </View>
     </TouchableOpacity>
@@ -447,6 +446,7 @@ const styles = StyleSheet.create({
   avatar: { width: 18, height: 18, borderRadius: 9, backgroundColor: COLORS.surfaceLight },
   avatarClip: { backgroundColor: COLORS.primary },
   cardAuthor: { flex: 1, fontSize: FONT_SIZES.xs + 1, color: COLORS.textSecondary, fontWeight: WEIGHTS.regular },
+  cardLikeWrap: { flexDirection: "row", alignItems: "center", gap: 3 },
   cardLike: { fontSize: FONT_SIZES.xs + 1, color: COLORS.textSecondary, fontWeight: WEIGHTS.regular },
   cardLikeClip: { color: COLORS.primary, fontWeight: WEIGHTS.semibold },
 });

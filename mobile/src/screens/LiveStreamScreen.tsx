@@ -23,7 +23,9 @@ import { AudioModule, RecordingPresets, requestRecordingPermissionsAsync, setAud
 import * as FileSystem from "expo-file-system/legacy";
 import * as Speech from "expo-speech";
 import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { COLORS, SPACING, RADII, WEIGHTS } from "../constants/theme";
+import { useLanguage } from "../context/LanguageContext";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
@@ -172,6 +174,7 @@ interface Props {
 }
 
 export default function LiveStreamScreen({ onAssistantAction, pendingAction, onPendingActionConsumed }: Props) {
+  const { t } = useLanguage();
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [micPermission, requestMicPermission] = useMicrophonePermissions();
 
@@ -181,7 +184,6 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const [chatInput, setChatInput] = useState("");
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
-  const [isCamOff, setIsCamOff] = useState(false);
   const [facing, setFacing] = useState<"front" | "back">("front");
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcribeStatus, setTranscribeStatus] = useState("");
@@ -1474,7 +1476,7 @@ Strict rules:
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       {/* ── LAYER 1: Fullscreen camera ── */}
-      {granted && !isCamOff ? (
+      {granted ? (
         <CameraView
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
@@ -1483,17 +1485,8 @@ Strict rules:
         />
       ) : (
         <View style={[StyleSheet.absoluteFill, styles.camFallback]}>
-          {!granted ? (
-            <>
-              <Text style={styles.camFallbackIcon}>🎥</Text>
-              <Text style={styles.camFallbackText}>Camera & Mic Access Required</Text>
-            </>
-          ) : (
-            <>
-              <Text style={styles.camFallbackIcon}>📷</Text>
-              <Text style={styles.camFallbackText}>Camera Off</Text>
-            </>
-          )}
+          <Ionicons name="videocam-outline" size={48} color={COLORS.textMuted} style={{ marginBottom: SPACING.md }} />
+          <Text style={styles.camFallbackText}>Camera & Mic Access Required</Text>
         </View>
       )}
 
@@ -1503,20 +1496,19 @@ Strict rules:
         {/* TOP BAR */}
         <View style={styles.topBar}>
           <View style={styles.topLeft}>
-            <LinearGradient
-              colors={[COLORS.gradientStart, COLORS.gradientEnd]}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-              style={styles.logoBar}
-            />
-            <Text style={styles.brand}>Stream Mind</Text>
-          </View>
-
-          {isLive && (
-            <View style={styles.topCenter}>
+            <View style={styles.pandaIconWrap}>
+              <MaterialCommunityIcons name="panda" size={22} color="#FFFFFF" />
+            </View>
+            {isLive && (
               <View style={styles.livePillWrap}>
                 <Animated.View style={[styles.liveDot, { transform: [{ scale: pulseAnim }] }]} />
                 <Text style={styles.livePillText}>LIVE</Text>
               </View>
+            )}
+          </View>
+
+          {isLive && (
+            <View style={styles.topCenter}>
               <Text style={styles.durationText}>{fmt(duration)}</Text>
             </View>
           )}
@@ -1524,12 +1516,19 @@ Strict rules:
           <View style={styles.topRight}>
             {isLive && (
               <View style={styles.viewersChip}>
-                <Text style={styles.viewersText}>👁 {viewers.toLocaleString()}</Text>
+                <Ionicons name="eye-outline" size={13} color="#FFFFFF" style={{ marginRight: 4 }} />
+                <Text style={styles.viewersText}>{viewers.toLocaleString()}</Text>
               </View>
             )}
+            <TouchableOpacity
+              style={styles.flipChip}
+              onPress={() => setFacing((f) => f === "front" ? "back" : "front")}
+            >
+              <Ionicons name="camera-reverse" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
             {isLive && (
               <TouchableOpacity style={styles.endChip} onPress={handleEndStream}>
-                <Text style={styles.endChipText}>✕</Text>
+                <Ionicons name="close" size={18} color="#FFFFFF" />
               </TouchableOpacity>
             )}
           </View>
@@ -1630,7 +1629,7 @@ Strict rules:
         {/* Pre-permission prompt */}
         {!granted && (
           <View style={styles.permCenter}>
-            <Text style={styles.permIcon}>🎥</Text>
+            <Ionicons name="videocam" size={52} color={COLORS.text} style={{ marginBottom: SPACING.md }} />
             <Text style={styles.permTitle}>Camera & Mic Access</Text>
             <Text style={styles.permSub}>Required to go live</Text>
             <TouchableOpacity style={styles.permBtn} onPress={requestPermissions} activeOpacity={0.85}>
@@ -1655,34 +1654,14 @@ Strict rules:
                 style={[styles.sideBtn, isMuted && styles.sideBtnRed]}
                 onPress={() => setIsMuted((m) => !m)}
               >
-                <Text style={styles.sideBtnIcon}>{isMuted ? "MUTE" : "MIC"}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.sideBtn, isCamOff && styles.sideBtnRed]}
-                onPress={() => setIsCamOff((c) => !c)}
-              >
-                <Text style={styles.sideBtnIcon}>{isCamOff ? "CAM OFF" : "CAM"}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.sideBtn}
-                onPress={() => setFacing((f) => f === "front" ? "back" : "front")}
-              >
-                <Text style={styles.sideBtnIcon}>FLIP</Text>
+                <Ionicons name={isMuted ? "mic-off" : "mic"} size={20} color="#FFFFFF" />
               </TouchableOpacity>
               {isLive && (
                 <TouchableOpacity
                   style={[styles.sideBtn, isTranscribing && styles.sideBtnGreen]}
                   onPress={handleToggleTranscribe}
                 >
-                  <Text style={styles.sideBtnIcon}>AI</Text>
-                </TouchableOpacity>
-              )}
-              {isLive && (
-                <TouchableOpacity
-                  style={[styles.sideBtn, emojiMode && styles.sideBtnPurple]}
-                  onPress={() => setEmojiMode(m => !m)}
-                >
-                  <Text style={styles.sideBtnIcon}>EMO</Text>
+                  <Ionicons name="sparkles" size={20} color="#FFFFFF" />
                 </TouchableOpacity>
               )}
               {isLive && (
@@ -1690,21 +1669,21 @@ Strict rules:
                   style={[styles.sideBtn, pandaLiveOn && styles.sideBtnActive]}
                   onPress={togglePandaLive}
                 >
-                  <Text style={styles.sideBtnIcon}>{pandaLiveOn ? "PANDA ON" : "PANDA"}</Text>
+                  <Ionicons name="paw" size={20} color="#FFFFFF" />
                 </TouchableOpacity>
               )}
               <TouchableOpacity
                 style={[styles.sideBtn, showCommands && styles.sideBtnActive]}
                 onPress={() => setShowCommands(v => !v)}
               >
-                <Text style={styles.sideBtnIcon}>HELP</Text>
+                <Ionicons name="help-circle-outline" size={22} color="#FFFFFF" />
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.sideBtn, styles.sideBtnClip, isClipping && styles.sideBtnRed]}
                 onPress={handleClip}
                 disabled={isClipping}
               >
-                <Text style={styles.sideBtnIcon}>✂️</Text>
+                <Ionicons name="cut" size={20} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
           )}
@@ -1781,7 +1760,7 @@ Strict rules:
                 start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                 style={styles.goLiveGrad}
               >
-                <Text style={styles.goLiveText}>● Go Live</Text>
+                <Text style={styles.goLiveText}>{t("goLive")}</Text>
               </LinearGradient>
             </TouchableOpacity>
           )}
@@ -1793,7 +1772,7 @@ Strict rules:
             <View style={styles.commandsHeader}>
               <Text style={styles.commandsTitle}>Voice Commands</Text>
               <TouchableOpacity onPress={() => setShowCommands(false)}>
-                <Text style={styles.commandsClose}>✕</Text>
+                <Ionicons name="close" size={16} color="rgba(255,255,255,0.5)" />
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.commandsScroll} showsVerticalScrollIndicator={false}>
@@ -1844,8 +1823,16 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.3)",
   },
   topLeft: { flexDirection: "row", alignItems: "center", gap: SPACING.sm, flex: 1 },
-  logoBar: { width: 20, height: 3, borderRadius: 2 },
-  brand: { fontSize: 16, fontWeight: "800", color: "#fff", letterSpacing: -0.3 },
+  pandaIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   topCenter: { alignItems: "center", gap: 3, flex: 1 },
   livePillWrap: {
     flexDirection: "row",
@@ -1858,9 +1845,11 @@ const styles = StyleSheet.create({
   },
   liveDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: "#fff" },
   livePillText: { fontSize: 11, fontWeight: "900", color: "#fff", letterSpacing: 1.5 },
-  durationText: { fontSize: 11, fontWeight: "600", color: "rgba(255,255,255,0.8)" },
+  durationText: { fontSize: 14, fontWeight: "700", color: "#fff", letterSpacing: 0.5 },
   topRight: { flexDirection: "row", alignItems: "center", gap: SPACING.sm, flex: 1, justifyContent: "flex-end" },
   viewersChip: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: "rgba(0,0,0,0.5)",
     borderRadius: RADII.full,
     paddingHorizontal: SPACING.sm,
@@ -1869,6 +1858,12 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.15)",
   },
   viewersText: { fontSize: 12, fontWeight: "600", color: "#fff" },
+  flipChip: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
+    alignItems: "center", justifyContent: "center",
+  },
   endChip: {
     width: 30, height: 30, borderRadius: 15,
     backgroundColor: "rgba(0,0,0,0.55)",

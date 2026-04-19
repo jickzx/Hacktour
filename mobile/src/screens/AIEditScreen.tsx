@@ -10,10 +10,11 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { getThumbnailAsync } from "expo-video-thumbnails";
+import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS, SHADOWS } from "../constants/theme";
 import { processEdit } from "../services/api";
+import { useLanguage } from "../context/LanguageContext";
 
-const QUICK_PROMPTS = ["Add subtitles", "Remove silence", "Add transitions", "Color grade", "Add music", "Zoom on action"];
 interface VideoClip { id: string; name: string; duration: string; durationSecs: number; thumbnail: string | null; uri: string }
 interface CompositionResult {
   fps: number; width: number; height: number; totalDurationFrames: number;
@@ -30,6 +31,15 @@ async function readThumbnailDataUrl(uri: string | null) {
 }
 
 export default function AIEditScreen() {
+  const { t } = useLanguage();
+  const QUICK_PROMPTS = [
+    { key: "quickAddSubtitles", label: t("quickAddSubtitles") },
+    { key: "quickRemoveSilence", label: t("quickRemoveSilence") },
+    { key: "quickTransitions", label: t("quickTransitions") },
+    { key: "quickColorGrade", label: t("quickColorGrade") },
+    { key: "quickAddMusic", label: t("quickAddMusic") },
+    { key: "quickZoom", label: t("quickZoom") },
+  ];
   const [prompt, setPrompt] = useState("");
   const [clips, setClips] = useState<VideoClip[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -85,50 +95,50 @@ export default function AIEditScreen() {
 
   return (
     <View style={s.root}>
-      {showSavedBanner && <LinearGradient colors={[COLORS.gradientStart, COLORS.gradientEnd]} style={s.banner} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}><Text style={s.bannerText}>Clip saved to library</Text></LinearGradient>}
+      {showSavedBanner && <LinearGradient colors={[COLORS.gradientStart, COLORS.gradientEnd]} style={s.banner} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}><Text style={s.bannerText}>{t("clipSavedToLibrary")}</Text></LinearGradient>}
       <View style={s.header}>
-        <TouchableOpacity style={s.iconBtn}><Text style={s.iconText}>☰</Text></TouchableOpacity>
-        <View style={s.titleWrap}><Text style={s.title}>Edit</Text><View style={s.titleDot} /></View>
-        <TouchableOpacity style={s.iconBtn}><Text style={s.iconText}>⌕</Text></TouchableOpacity>
+        <TouchableOpacity style={s.iconBtn}><Ionicons name="menu" size={24} color={COLORS.text} /></TouchableOpacity>
+        <View style={s.titleWrap}><Text style={s.title}>{t("editScreenTitle")}</Text><View style={s.titleDot} /></View>
+        <TouchableOpacity style={s.iconBtn}><Ionicons name="search" size={22} color={COLORS.text} /></TouchableOpacity>
       </View>
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
         <TouchableOpacity onPress={handleUpload} activeOpacity={0.85} style={s.uploadCard}>
           <View style={s.uploadPlus}><Text style={s.uploadPlusText}>+</Text></View>
-          <Text style={s.uploadTitle}>Upload Video Clips</Text>
-          <Text style={s.uploadSub}>MP4, MOV, AVI — up to 2GB per clip</Text>
+          <Text style={s.uploadTitle}>{t("uploadVideoClips")}</Text>
+          <Text style={s.uploadSub}>{t("uploadSubtitle")}</Text>
           {clips.length > 0 && <View style={s.clipBadge}><Text style={s.clipBadgeText}>{clips.length} clip{clips.length !== 1 ? "s" : ""} selected</Text></View>}
         </TouchableOpacity>
         {clips.length > 0 && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.clipRow} contentContainerStyle={s.clipRowContent}>
             {clips.map((clip) => (
               <View key={clip.id} style={s.clipCard}>
-                <View style={s.clipThumb}>{clip.thumbnail ? <Image source={{ uri: clip.thumbnail }} style={s.clipThumbImg} resizeMode="cover" /> : <Text style={s.clipThumbIcon}>▶</Text>}</View>
+                <View style={s.clipThumb}>{clip.thumbnail ? <Image source={{ uri: clip.thumbnail }} style={s.clipThumbImg} resizeMode="cover" /> : <Ionicons name="play" size={22} color={COLORS.textMuted} />}</View>
                 <Text style={s.clipName} numberOfLines={1}>{clip.name}</Text><Text style={s.clipDur}>{clip.duration}</Text>
                 <TouchableOpacity style={s.clipRm} onPress={() => handleRemoveClip(clip.id)}><Text style={s.clipRmText}>×</Text></TouchableOpacity>
               </View>
             ))}
           </ScrollView>
         )}
-        <Text style={s.sectionLabel}>DESCRIBE YOUR EDIT</Text>
-        <TextInput style={s.promptInput} value={prompt} onChangeText={setPrompt} placeholder="e.g. Add cinematic transitions, remove dead air, add subtitles…" placeholderTextColor={COLORS.textMuted} multiline numberOfLines={4} textAlignVertical="top" />
+        <Text style={s.sectionLabel}>{t("describeYourEdit")}</Text>
+        <TextInput style={s.promptInput} value={prompt} onChangeText={setPrompt} placeholder={t("editPromptPlaceholder")} placeholderTextColor={COLORS.textMuted} multiline numberOfLines={4} textAlignVertical="top" />
         <Text style={s.promptHint}>{prompt.length}/500</Text>
-        <Text style={s.sectionLabel}>QUICK PROMPTS</Text>
-        <View style={s.chipWrap}>{QUICK_PROMPTS.map((label) => (
-          <TouchableOpacity key={label} style={[s.chip, activeQuick === label && s.chipActive]} onPress={() => handleQuickPress(label)} activeOpacity={0.7}>
-            <Text style={[s.chipText, activeQuick === label && s.chipTextActive]}>{label}</Text>
+        <Text style={s.sectionLabel}>{t("quickPrompts")}</Text>
+        <View style={s.chipWrap}>{QUICK_PROMPTS.map(({ key, label }) => (
+          <TouchableOpacity key={key} style={[s.chip, activeQuick === key && s.chipActive]} onPress={() => handleQuickPress(key)} activeOpacity={0.7}>
+            <Text style={[s.chipText, activeQuick === key && s.chipTextActive]}>{label}</Text>
           </TouchableOpacity>
         ))}</View>
-        {activeQuick === "Clip" && <View style={s.trimWrap}><Text style={s.sectionLabel}>TRIM RANGE (SECONDS)</Text>
+        {activeQuick === "Clip" && <View style={s.trimWrap}><Text style={s.sectionLabel}>{t("trimRange")}</Text>
           <View style={s.trimRow}>
-            <View style={s.trimField}><Text style={s.trimLabel}>Start</Text><TextInput style={s.trimInput} value={trimStart} onChangeText={setTrimStart} placeholder="0" placeholderTextColor={COLORS.textMuted} keyboardType="decimal-pad" /></View>
+            <View style={s.trimField}><Text style={s.trimLabel}>{t("trimStart")}</Text><TextInput style={s.trimInput} value={trimStart} onChangeText={setTrimStart} placeholder="0" placeholderTextColor={COLORS.textMuted} keyboardType="decimal-pad" /></View>
             <Text style={s.trimDash}>→</Text>
-            <View style={s.trimField}><Text style={s.trimLabel}>End</Text><TextInput style={s.trimInput} value={trimEnd} onChangeText={setTrimEnd} placeholder={clips[0] ? String(Math.floor(clips[0].durationSecs)) : "end"} placeholderTextColor={COLORS.textMuted} keyboardType="decimal-pad" /></View>
+            <View style={s.trimField}><Text style={s.trimLabel}>{t("trimEnd")}</Text><TextInput style={s.trimInput} value={trimEnd} onChangeText={setTrimEnd} placeholder={clips[0] ? String(Math.floor(clips[0].durationSecs)) : "end"} placeholderTextColor={COLORS.textMuted} keyboardType="decimal-pad" /></View>
           </View></View>}
         <TouchableOpacity onPress={handleGenerate} disabled={disabled} activeOpacity={0.85}>
           <LinearGradient colors={disabled ? [COLORS.surfaceLight, COLORS.surfaceLight] : [COLORS.gradientStart, COLORS.gradientEnd]} style={s.genBtn} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-            <Text style={s.genText}>{isGenerating ? "Generating…" : "Generate Edit"}</Text></LinearGradient>
+            <Text style={s.genText}>{isGenerating ? t("generating") : t("generateEdit")}</Text></LinearGradient>
         </TouchableOpacity>
-        {isGenerating && <View style={s.loadingWrap}><Animated.View style={[s.shimmerBar, { opacity: shimmer }]} /><ActivityIndicator size="large" color={COLORS.primary} /><Text style={s.loadingText}>Processing video — this may take a moment…</Text></View>}
+        {isGenerating && <View style={s.loadingWrap}><Animated.View style={[s.shimmerBar, { opacity: shimmer }]} /><ActivityIndicator size="large" color={COLORS.primary} /><Text style={s.loadingText}>{t("processingVideo")}</Text></View>}
         {error && <View style={s.errorWrap}><Text style={s.errorText}>{error}</Text></View>}
         {composition && <CompositionCard composition={composition} previewUri={previewUri} />}
       </ScrollView>

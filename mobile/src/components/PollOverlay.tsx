@@ -3,6 +3,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Animated, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { COLORS, SPACING, RADII, WEIGHTS } from "../constants/theme";
 
 interface Props {
@@ -66,7 +67,7 @@ export default function PollOverlay({ question, options, onClose, latestComment 
             <Text style={styles.pollBadgeText}>📊 POLL</Text>
           </View>
           <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
-            <Text style={styles.closeBtnText}>✕</Text>
+            <Ionicons name="close" size={16} color={COLORS.text} />
           </TouchableOpacity>
         </View>
 
