@@ -351,6 +351,66 @@ If no person or clothing is visible, return [].`,
 });
 
 /**
+ * POST /api/pose-coach
+ * multipart/form-data OR JSON: { frame: base64 | uploaded, shotIndex, totalShots, auto, previousPose? }
+ * Returns: { pose: string, readyToShoot: boolean, coaching: string }
+ *
+ * Acts as a live photo-shoot coach. Looks at the current camera frame and tells
+ * the streamer what pose to try next, or — if they're already in a great pose —
+ * confirms it's a good moment to shoot.
+ */
+app.post("/api/pose-coach", upload.single("frame"), async (req, res) => {
+  const base64: string = req.body?.base64 ?? (req.file ? fs.readFileSync(req.file.path).toString("base64") : "");
+  if (!base64) {
+    res.status(400).json({ error: "No frame provided" });
+    return;
+  }
+
+  const shotIndex = Number(req.body?.shotIndex ?? 0);
+  const totalShots = Number(req.body?.totalShots ?? 1);
+  const auto = req.body?.auto === "1" || req.body?.auto === true;
+  const previousPose = String(req.body?.previousPose ?? "").slice(0, 120);
+
+  try {
+    const prompt = `You are Panda, a warm photographer coaching the person on camera through a photo shoot.
+Current shot: ${shotIndex + 1} of ${totalShots}. Mode: ${auto ? "auto-capture" : "confirm with user"}.
+${previousPose ? `Previous pose asked: "${previousPose}".` : "This is the first shot, pick a fresh natural pose."}
+
+Look at the frame and return ONLY JSON, no markdown:
+{"pose":"short pose idea (max 8 words)","readyToShoot":false,"coaching":"one short friendly sentence (max 18 words) said out loud to the subject"}
+
+Rules:
+- pose: fresh suggestion for THIS shot. Vary across shots (smile, side profile, over-shoulder, playful, candid, hand gesture, etc).
+- readyToShoot: true ONLY if the subject is clearly in-frame, well-lit, facing the camera with an intentional pose that looks great. If they look confused, off-centre, half-turned, or just arrived, return false.
+- coaching: what you'd say out loud right now. If readyToShoot is true, hype them up briefly ("love it — holding now"). If false, guide them ("tilt chin up a bit, soften your shoulders"). Never use JSON or brackets inside this field.`;
+
+    const result = await getGeminiModel("poseCoach").generateContent([
+      { inlineData: { mimeType: "image/jpeg", data: base64 } },
+      prompt,
+    ]);
+    const raw = result.response.text().trim();
+    const objMatch = raw.match(/\{[\s\S]*\}/);
+    let parsed: { pose?: string; readyToShoot?: boolean; coaching?: string } = {};
+    try { parsed = JSON.parse(objMatch?.[0] ?? "{}"); } catch {
+      console.warn("[PoseCoach] JSON parse failed:", raw.slice(0, 200));
+    }
+
+    const out = {
+      pose: String(parsed.pose ?? previousPose ?? "natural smile").trim().slice(0, 80),
+      readyToShoot: Boolean(parsed.readyToShoot),
+      coaching: String(parsed.coaching ?? "Hold it right there").trim().slice(0, 160),
+    };
+    console.log(`[PoseCoach] shot ${shotIndex + 1}/${totalShots} ready=${out.readyToShoot} pose="${out.pose}"`);
+    res.json(out);
+  } catch (err) {
+    console.error("[PoseCoach] Error:", err);
+    res.status(500).json({ error: "Pose coach failed", detail: String(err) });
+  } finally {
+    if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+  }
+});
+
+/**
  * POST /api/product-link
  * Body: { query: string }
  * Returns: { success: boolean, item?: { title, price?, store?, url, displayUrl, summary } }
@@ -441,14 +501,14 @@ Action types:
 - pull_up_clip → include "query":"<search description>" — streamer wants to show a clip from their library on stream. Extract the descriptive part as the search query. Examples: "pull up the clip where I was cooking" → query:"cooking", "show that dancing clip" → query:"dancing", "play the intro video" → query:"intro video"
 - pull_up_product → include "query":"<product search>" — streamer wants Panda to find a shopping page for a product and show it on stream. Examples: "pull up red nike air maxes" → query:"red nike air maxes", "panda show me black adidas sambas" → query:"black adidas sambas"
 - clip — save a clip of the current live moment to the library
-- take_photos → include "poses":["pose 1","pose 2",...] with 3-5 short pose prompts
+- take_photos → include "count":<number of shots, default 5, max 10> and "auto":<true|false — true only if the streamer clearly said "automatically" / "auto" / "without asking" / "on your own">. Pose ideas come from the live vision coach, not this payload, so you do not need to list poses yourself unless the streamer specifically dictated them — only then include "poses":[…].
 - identify_outfit → no extra fields
 - change_voice → include any useful combination of:
   - "preset":"default"|"chill"|"hype"|"deep"|"chipmunk"
   - "language":"en-US"|"en-GB"|"en-AU"|"es-ES"|"fr-FR"|"de-DE"|"ja-JP"
 - none
 
-If the streamer says anything like "take pictures of me", "take my photo", "photo shoot", "snap me", use take_photos with 3-5 fun, short pose instructions (e.g. "big smile", "look over your shoulder", "peace sign", "candid laugh").
+If the streamer says anything like "take pictures of me", "take my photo", "photo shoot", "snap me", use take_photos. Pick a sensible count (1-10; default 5 if unspecified). Set auto=true only when the streamer explicitly asks for automatic / hands-free capture (e.g. "take 5 pictures automatically", "just go for it"); otherwise auto=false so Panda asks before each shot.
 If the streamer says anything like "what am I wearing", "rate my fit", "find my outfit", "where can I buy this", "link my clothes", "what's this shirt", use identify_outfit.
 If the streamer asks to change Panda's voice, accent, speed, pitch, or vibe, use change_voice.
 Use preset="chill" for softer/slower voice requests, preset="hype" for energetic/faster voice requests, preset="deep" for lower pitch requests, preset="chipmunk" for very high pitch requests, and language for accent/language requests.

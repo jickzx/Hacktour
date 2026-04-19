@@ -24,8 +24,12 @@ export type AssistantAction = {
   seconds?: number;
   /** for pull_up_clip: search query extracted from voice command */
   query?: string;
-  /** for take_photos: guided photo prompts */
+  /** for take_photos: optional pre-dictated poses (otherwise the live coach picks them) */
   poses?: string[];
+  /** for take_photos: how many shots to take (default 5, max 10) */
+  count?: number;
+  /** for take_photos: true = auto-capture with countdown; false = ask "yes" before each shot */
+  auto?: boolean;
   /** for change_voice: preset and/or language */
   preset?: "default" | "chill" | "hype" | "deep" | "chipmunk";
   language?: string;
