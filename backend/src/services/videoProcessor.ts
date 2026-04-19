@@ -8,20 +8,57 @@
  * overlays are skipped silently rather than crashing the job.
  */
 import ffmpeg from "fluent-ffmpeg";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import type { RemotionComposition, TextOverlay, Transition } from "../types/remotion";
 
-ffmpeg.setFfmpegPath("/opt/homebrew/bin/ffmpeg");
-
-const FONT_PATH = "/System/Library/Fonts/HelveticaNeue.ttc";
 const OUTPUT_DIR = "/tmp/hacktour-outputs";
+const VIDEO_CODEC = process.platform === "darwin" ? "h264_videotoolbox" : "libx264";
+
+/** Resolve ffmpeg from env, PATH, or known install locations */
+function resolveFfmpegPath(): string {
+  const configured = process.env.FFMPEG_PATH?.trim();
+  if (configured) return configured;
+
+  try {
+    return execFileSync("which", ["ffmpeg"], { encoding: "utf8" }).trim();
+  } catch {
+    const fallbacks = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
+    const match = fallbacks.find((candidate) => fs.existsSync(candidate));
+    return match ?? "ffmpeg";
+  }
+}
+
+/** Prefer a real font file, otherwise let fontconfig pick a sane default */
+function resolveDrawtextFont(): string {
+  const configured = process.env.FFMPEG_FONT_PATH?.trim();
+  if (configured) return `fontfile='${configured}'`;
+
+  const candidates = [
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+  ];
+
+  const match = candidates.find((candidate) => fs.existsSync(candidate));
+  return match ? `fontfile='${match}'` : "font='Sans'";
+}
+
+const FFMPEG_PATH = resolveFfmpegPath();
+const DRAWTEXT_FONT = resolveDrawtextFont();
+
+ffmpeg.setFfmpegPath(FFMPEG_PATH);
 
 /** Detect once at startup whether drawtext is available in this ffmpeg build */
 const DRAWTEXT_AVAILABLE = (() => {
   try {
-    const out = execSync("/opt/homebrew/bin/ffmpeg -filters 2>&1", { encoding: "utf8" });
+    const out = execFileSync(FFMPEG_PATH, ["-hide_banner", "-filters"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     return out.includes("drawtext");
   } catch {
     return false;
@@ -88,7 +125,7 @@ function buildDrawtext(o: TextOverlay, fps: number): string {
   const color = o.color.startsWith("#") ? o.color.replace("#", "") : o.color;
   const text = escapeDrawtext(o.content);
   return (
-    `drawtext=fontfile='${FONT_PATH}':` +
+    `drawtext=${DRAWTEXT_FONT}:` +
     `text='${text}':` +
     `fontsize=${o.fontSize}:` +
     `fontcolor=0x${color}:` +
@@ -165,7 +202,7 @@ async function processSingleClip(
       .videoFilters(vFilters)
       .audioFilters(aFilters)
       .outputOptions([
-        "-c:v h264_videotoolbox",
+        `-c:v ${VIDEO_CODEC}`,
         "-b:v 4M",
         "-c:a aac",
         "-b:a 128k",
@@ -271,7 +308,7 @@ async function processMultiClip(
       .outputOptions([
         "-map [vout]",
         "-map [aout]",
-        "-c:v h264_videotoolbox",
+        `-c:v ${VIDEO_CODEC}`,
         "-b:v 4M",
         "-c:a aac",
         "-b:a 128k",

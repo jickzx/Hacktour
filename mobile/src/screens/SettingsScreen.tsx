@@ -17,6 +17,7 @@ import {
   loadVoiceSettings,
   updateVoiceSettings,
   VoiceSettings,
+  VOICE_PRESETS,
 } from "../services/voiceSettings";
 
 const LANGUAGES: { code: string; label: string }[] = [
@@ -27,14 +28,6 @@ const LANGUAGES: { code: string; label: string }[] = [
   { code: "fr-FR", label: "French" },
   { code: "de-DE", label: "German" },
   { code: "ja-JP", label: "Japanese" },
-];
-
-const PRESETS: { label: string; patch: Partial<VoiceSettings> }[] = [
-  { label: "Default", patch: { rate: 1.1, pitch: 1.0 } },
-  { label: "Chill", patch: { rate: 0.9, pitch: 0.9 } },
-  { label: "Hype", patch: { rate: 1.3, pitch: 1.2 } },
-  { label: "Deep", patch: { rate: 1.0, pitch: 0.7 } },
-  { label: "Chipmunk", patch: { rate: 1.4, pitch: 1.8 } },
 ];
 
 export default function SettingsScreen() {
@@ -101,7 +94,7 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Presets</Text>
           <View style={styles.presetRow}>
-            {PRESETS.map((p) => (
+            {VOICE_PRESETS.map((p) => (
               <TouchableOpacity
                 key={p.label}
                 style={styles.presetChip}

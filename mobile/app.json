@@ -26,13 +26,11 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.hacktour.app",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "usesCleartextTraffic": true
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    },
-    "extra": {
-      "apiBaseUrl": "http://localhost:3001"
     },
     "plugins": [
       "expo-audio",

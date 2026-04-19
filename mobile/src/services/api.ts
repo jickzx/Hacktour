@@ -1,11 +1,5 @@
 /** API service for communicating with the Stream Mind backend */
-import { Platform } from "react-native";
-
-// On web, the backend is always local; on device, read the IP from the env var.
-// Set EXPO_PUBLIC_BACKEND_URL in mobile/.env to your Mac's LAN/hotspot IP or ngrok URL.
-const API_BASE =
-  process.env.EXPO_PUBLIC_BACKEND_URL ??
-  (Platform.OS === "web" ? "http://localhost:3001" : "http://localhost:3001");
+import { BACKEND_URL as API_BASE } from "./backendUrl";
 
 /**
  * Parse response as JSON, throwing a friendly error if the server returns

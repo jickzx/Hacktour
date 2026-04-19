@@ -16,6 +16,15 @@ MOBILE_PID=""
 LT_PID=""
 LT_LOG=""
 
+get_lan_ip() {
+  local ip
+  ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '!/docker|br-/ { split($4, parts, "/"); print parts[1]; exit }')
+  if [ -z "$ip" ]; then
+    ip=$(ip -4 -o addr show scope global 2>/dev/null | awk 'NR==1 { split($4, parts, "/"); print parts[1] }')
+  fi
+  printf '%s' "$ip"
+}
+
 cleanup() {
   echo ""
   echo "[start] shutting down…"
@@ -66,7 +75,13 @@ for i in $(seq 1 40); do
   sleep 0.5
 done
 
-BACKEND_URL="http://localhost:3001"
+LAN_IP="$(get_lan_ip)"
+if [ -z "$LAN_IP" ]; then
+  echo "[start] could not detect a LAN IP for Expo."
+  exit 1
+fi
+
+BACKEND_URL="http://${LAN_IP}:3001"
 
 if $TUNNEL; then
   echo "[start] opening public tunnel to backend via localtunnel …"

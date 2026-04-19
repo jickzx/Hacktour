@@ -8,22 +8,46 @@ import cors from "cors";
 import multer from "multer";
 import fs from "fs";
 import http from "http";
+import os from "os";
 import { WebSocketServer, WebSocket } from "ws";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import editRouter from "./routes/edit";
 import clipsRouter from "./routes/clips";
 import processRouter from "./routes/process";
 import youtubeRouter from "./routes/youtube";
 import feedRouter from "./routes/feed";
 import photosRouter from "./routes/photos";
+import { GEMINI_MODELS, getGeminiModel } from "./services/modelConfig";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || "0.0.0.0";
+const liveTokenClient = process.env.GEMINI_API_KEY
+  ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, apiVersion: "v1alpha" })
+  : null;
+
+/**
+ * Find the current LAN URLs so local devices can reach the backend.
+ */
+function getServerUrls(port: string | number): string[] {
+  const urls = new Set([`http://localhost:${port}`]);
+
+  for (const addresses of Object.values(os.networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === "IPv4" && !address.internal) {
+        urls.add(`http://${address.address}:${port}`);
+      }
+    }
+  }
+
+  return [...urls];
+}
 
 const upload = multer({ dest: "/tmp/hacktour-uploads/" });
 
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
+app.use("/media", express.static("/tmp/hacktour-media/"));
 app.use("/outputs", express.static("/tmp/hacktour-outputs/"));
 
 app.get("/api/health", (_req, res) => {
@@ -36,12 +60,6 @@ app.use("/api", processRouter);
 app.use("/api", youtubeRouter);
 app.use("/api", photosRouter);
 app.use("/api", feedRouter);
-
-function getGemini() {
-  if (!process.env.GEMINI_API_KEY) throw new Error("Missing GEMINI_API_KEY");
-  const model = process.env.GEMINI_MODEL ?? "gemini-3.1-flash";
-  return new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model });
-}
 
 /**
  * POST /api/transcribe
@@ -59,7 +77,7 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
 
   try {
     const base64 = fs.readFileSync(filePath).toString("base64");
-    const result = await getGemini().generateContent([
+    const result = await getGeminiModel("transcription").generateContent([
       { inlineData: { mimeType: "audio/m4a", data: base64 } },
       "Transcribe exactly what is spoken in this audio clip. Return only the spoken words verbatim, nothing else. If nothing is spoken return empty string.",
     ]);
@@ -103,7 +121,7 @@ app.post("/api/analyse", upload.single("frame"), async (req, res) => {
 
     // ── Clip mode: just return a descriptive clip prompt ──────────────────────
     if (clipMode) {
-      const clipRes = await getGemini().generateContent([
+      const clipRes = await getGeminiModel("assistant").generateContent([
         {
           text: `You are a video clip titler. Look at this livestream frame and the streamer's recent speech, then write a short, punchy clip prompt (5-12 words) that describes what to highlight.${recentSpeech ? `\n\nStreamer just said: "${recentSpeech}"` : ""}\n\nReturn ONLY the clip prompt text, nothing else.`,
         },
@@ -116,9 +134,9 @@ app.post("/api/analyse", upload.single("frame"), async (req, res) => {
     }
 
     const COMMENTS_SYSTEM = emojiMode
-      ? `You are a Twitch/Kick chat viewer in EMOJI ONLY mode. React using ONLY emojis — no words. Return a JSON array of 8-12 objects: [{"user":"name","text":"🔥😂","avatar":"emoji"},...]`
+      ? `You are a Twitch/Kick chat viewer in EMOJI ONLY mode. React using ONLY emojis — no words. Return a JSON array of 3-5 objects: [{"user":"name","text":"🔥😂","avatar":"emoji"},...]`
       : `You are a hype Gen Z Twitch/Kick/Bilibili chat. Return ONLY a valid JSON array, no markdown.
-Generate 8-12 short authentic viewer comments reacting to the scene and streamer speech.
+Generate 3-5 short authentic viewer comments reacting to the scene and streamer speech.
 Rules:
 - SHORT (1-8 words) like real live chat
 - Mix: hype, jokes, memes, questions, reactions, emojis
@@ -129,7 +147,7 @@ Rules:
 [{"user":"name","text":"comment","avatar":"emoji"},...]`;
 
     // Step 1: scene analysis with frame + transcript context
-    const videoRes = await getGemini().generateContent([
+    const videoRes = await getGeminiModel("chat").generateContent([
       {
         text: `You are a real-time stream analyzer. Describe what is happening in 1-2 sentences. Focus on actions, objects, notable events.${recentSpeech ? `\n\nStreamer just said: "${recentSpeech}"` : ""}`,
       },
@@ -144,7 +162,7 @@ Rules:
       recentSpeech ? `IMPORTANT — streamer just said: "${recentSpeech}" — react to this directly` : "",
     ].filter(Boolean).join("\n");
 
-    const reactResult = await getGemini().generateContent(`${COMMENTS_SYSTEM}\n\n${commentContext}`);
+    const reactResult = await getGeminiModel("chat").generateContent(`${COMMENTS_SYSTEM}\n\n${commentContext}`);
     const transcript = sceneAnalysis;
     const reactRaw = reactResult.response.text().trim();
     const arrMatch = reactRaw.match(/\[[\s\S]*\]/);
@@ -178,7 +196,7 @@ app.post("/api/clip-prompt", async (req, res) => {
     const prompt = speech
       ? `Based on what the streamer just said, write a short punchy clip title (5-12 words) suitable for a highlight reel.\n\nStreamer said: "${speech}"\n\nReturn ONLY the clip title, no quotes, no explanation.`
       : `Write a short punchy generic livestream highlight title (5-10 words). Return ONLY the title.`;
-    const result = await getGemini().generateContent(prompt);
+    const result = await getGeminiModel("assistant").generateContent(prompt);
     const clipPrompt = result.response.text().trim().replace(/^["']|["']$/g, "");
     res.json({ clipPrompt });
   } catch (err) {
@@ -202,7 +220,7 @@ app.post("/api/detect-poll", async (req, res) => {
   if (!looksLikePoll) { res.json({ poll: null }); return; }
 
   try {
-    const result = await getGemini().generateContent({
+      const result = await getGeminiModel("assistant").generateContent({
       contents: [{ role: "user", parts: [{ text: `Streamer said: "${transcript}"\n\nOnly call create_poll if the streamer is DIRECTLY asking chat to choose between two specific named options (e.g. "McDonald's or KFC?", "cats or dogs?", "iOS or Android?"). The question must be explicit — not a statement, not rhetorical. If in any doubt, do NOT call create_poll.` }] }],
       tools: [{
         functionDeclarations: [{
@@ -255,7 +273,7 @@ app.post("/api/outfit", upload.single("photo"), async (req, res) => {
     const base64 = fs.readFileSync(filePath).toString("base64");
     const mimeType = req.file.mimetype || "image/jpeg";
 
-    const result = await getGemini().generateContent([
+    const result = await getGeminiModel("defaultText").generateContent([
       { inlineData: { mimeType, data: base64 } },
       `Identify each distinct clothing, footwear, or accessory item the person in this image is wearing.
 Return ONLY a JSON array, no markdown. Max 5 items, most prominent first.
@@ -327,7 +345,8 @@ If poll detected, respond with ONLY this exact JSON (no markdown, no extra text)
 If absolutely no choice/comparison present, respond with ONLY:
 {"action":{"type":"none"}}`
     : `You are "Panda", a smart voice assistant built into a live streaming app called Stream Mind.
-The app has 4 tabs: home, edit (AI video editor), live (live streaming), library.
+The app has 5 tabs: home, edit (AI video editor), live (live streaming), library, settings.
+Inside the library there is an Images section where saved photos appear.
 While live streaming you can control the stream with the commands listed below.
 You can also create polls when the streamer mentions a choice between things (e.g. "KFC or McDonald's", "iOS or Android", "cats or dogs").
 You can take a photo shoot of the streamer when they ask you to take pictures of them — you'll guide them through poses and the app will capture each one.
@@ -351,10 +370,17 @@ Action types:
 - countdown → include "seconds":<number> (default 5) to start a countdown in chat
 - pull_up_clip → include "query":"<search description>" — streamer wants to show a clip from their library on stream. Extract the descriptive part as the search query. Examples: "pull up the clip where I was cooking" → query:"cooking", "show that dancing clip" → query:"dancing", "play the intro video" → query:"intro video"
 - clip — save a clip of the current live moment to the library
+- take_photos → include "poses":["pose 1","pose 2",...] with 3-5 short pose prompts
+- identify_outfit → no extra fields
+- change_voice → include any useful combination of:
+  - "preset":"default"|"chill"|"hype"|"deep"|"chipmunk"
+  - "language":"en-US"|"en-GB"|"en-AU"|"es-ES"|"fr-FR"|"de-DE"|"ja-JP"
 - none
 
 If the streamer says anything like "take pictures of me", "take my photo", "photo shoot", "snap me", use take_photos with 3-5 fun, short pose instructions (e.g. "big smile", "look over your shoulder", "peace sign", "candid laugh").
 If the streamer says anything like "what am I wearing", "rate my fit", "find my outfit", "where can I buy this", "link my clothes", "what's this shirt", use identify_outfit.
+If the streamer asks to change Panda's voice, accent, speed, pitch, or vibe, use change_voice.
+Use preset="chill" for softer/slower voice requests, preset="hype" for energetic/faster voice requests, preset="deep" for lower pitch requests, preset="chipmunk" for very high pitch requests, and language for accent/language requests.
 If you detect the streamer is asking chat to choose between things, use create_poll automatically.
 If the streamer says "pull up", "show", "play", or "find" followed by a clip description, use pull_up_clip with the descriptive part as the query.
 If the streamer says "clip this", "clip that", "save this", "clip it", "record that", "save a clip", use clip.
@@ -367,7 +393,7 @@ If no action needed use {"type":"none"}.`;
       command,
     ].join("\n\n");
 
-    const result = await getGemini().generateContent(fullPrompt);
+    const result = await getGeminiModel("assistant").generateContent(fullPrompt);
     const assistRaw = result.response.text().trim();
     const objMatch = assistRaw.match(/\{[\s\S]*\}/);
     let parsed: { response: string; action?: Record<string, unknown> } = {
@@ -416,7 +442,7 @@ Return ONLY a JSON object, no markdown:
 If any comments look toxic/spammy, set modAlert to a short warning string instead of null.`;
 
   try {
-    const result = await getGemini().generateContent(prompt);
+    const result = await getGeminiModel("chat").generateContent(prompt);
     const raw = result.response.text().trim();
     const match = raw.match(/\{[\s\S]*\}/);
     let parsed = { suggestedReply: "", chatSummary: "", modAlert: null as string | null };
@@ -431,68 +457,166 @@ If any comments look toxic/spammy, set modAlert to a short warning string instea
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/live" });
 
-const GEMINI_LIVE_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${process.env.GEMINI_API_KEY}`;
+async function createGeminiLiveToken(): Promise<{ token: string; expireTime: string; newSessionExpireTime: string }> {
+  if (!liveTokenClient) throw new Error("Missing GEMINI_API_KEY");
+
+  const now = new Date();
+  const expireTime = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+  const newSessionExpireTime = new Date(now.getTime() + 60 * 1000).toISOString();
+  const token = await liveTokenClient.authTokens.create({
+    config: {
+      uses: 1,
+      expireTime,
+      newSessionExpireTime,
+      httpOptions: { apiVersion: "v1alpha" },
+    },
+  });
+  if (!token.name) throw new Error("Gemini live token missing name");
+
+  console.log(`[LiveDebug] token created expires=${expireTime} sessionUntil=${newSessionExpireTime}`);
+
+  return { token: token.name, expireTime, newSessionExpireTime };
+}
+
+async function createGeminiLiveUrl(): Promise<string> {
+  const { token } = await createGeminiLiveToken();
+  return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${token}`;
+}
+
+app.post("/api/live-token", async (_req, res) => {
+  try {
+    const token = await createGeminiLiveToken();
+    res.json(token);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to create live token";
+    console.error("[LiveDebug] token route error:", message);
+    res.status(500).json({ error: message });
+  }
+});
 
 wss.on("connection", (client) => {
   console.log("[Live] Client connected");
 
-  const geminiWs = new WebSocket(GEMINI_LIVE_URL);
+  let geminiWs: WebSocket | null = null;
   let ready = false;
   const queue: string[] = [];
 
-  geminiWs.on("open", () => {
-    const setup = {
-      setup: {
-        model: "models/gemini-live-2.5-flash",
-        generationConfig: {
-          responseModalities: ["TEXT"],
-          inputAudioTranscription: {},
-        },
-        systemInstruction: {
-          parts: [{ text: "Transcribe speech from this live stream audio. Return only the spoken words, nothing else." }],
-        },
-      },
-    };
-    geminiWs.send(JSON.stringify(setup));
-  });
+  createGeminiLiveUrl()
+    .then((url) => {
+      console.log("[LiveDebug] opening Gemini websocket");
+      geminiWs = new WebSocket(url);
 
-  geminiWs.on("message", (data) => {
-    const msg = JSON.parse(data.toString());
+      geminiWs.on("open", () => {
+        console.log(`[LiveDebug] socket open model=models/${GEMINI_MODELS.live}`);
+        const setup = {
+          setup: {
+            model: `models/${GEMINI_MODELS.live}`,
+            generationConfig: {
+              responseModalities: ["TEXT"],
+            },
+            realtimeInputConfig: {
+              automaticActivityDetection: {
+                disabled: false,
+                silenceDurationMs: 1200,
+                prefixPaddingMs: 300,
+                endOfSpeechSensitivity: "END_SENSITIVITY_UNSPECIFIED",
+                startOfSpeechSensitivity: "START_SENSITIVITY_UNSPECIFIED",
+              },
+              activityHandling: "ACTIVITY_HANDLING_UNSPECIFIED",
+              turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+            },
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+            systemInstruction: {
+              parts: [{ text: `You are Panda, a live voice assistant inside a streaming app.
+You can talk naturally to the streamer about anything and help with tasks.
+Keep replies short, warm, and direct.
+If the user is just speaking generally, reply conversationally.
+If the user asks for a task, help clearly in plain language.
+Do not use JSON.` }],
+            },
+          },
+        };
+        console.log("[LiveDebug] sending setup");
+        geminiWs?.send(JSON.stringify(setup));
+      });
 
-    if (msg.setupComplete) {
-      console.log("[Live] Gemini setup complete");
-      ready = true;
-      queue.forEach((m) => geminiWs.send(m));
-      queue.length = 0;
-      client.send(JSON.stringify({ type: "ready" }));
-      return;
-    }
+      geminiWs.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        console.log(`[LiveDebug] message keys=${Object.keys(msg).join(",")}`);
 
-    if (msg.inputTranscription?.text) {
-      client.send(JSON.stringify({ type: "transcript", text: msg.inputTranscription.text }));
-    }
-  });
+        if (msg.setupComplete) {
+          console.log("[Live] Gemini setup complete");
+          ready = true;
+          queue.forEach((m) => geminiWs?.send(m));
+          queue.length = 0;
+          client.send(JSON.stringify({ type: "ready" }));
+          return;
+        }
 
-  geminiWs.on("error", (err) => {
-    console.error("[Live] Gemini WS error:", err.message);
-    client.send(JSON.stringify({ type: "error", message: err.message }));
-  });
+        const inputTranscript = msg.serverContent?.inputTranscription?.text;
+        if (inputTranscript) {
+          console.log(`[LiveDebug] input transcript=${inputTranscript.slice(0, 80)}`);
+          client.send(JSON.stringify({ type: "transcript", text: inputTranscript }));
+        }
 
-  geminiWs.on("close", () => {
-    console.log("[Live] Gemini WS closed");
-    if (client.readyState === WebSocket.OPEN) {
-      client.close();
-    }
-  });
+        const liveText = msg.serverContent?.modelTurn?.parts
+          ?.map((part: { text?: string }) => part.text?.trim())
+          .filter(Boolean)
+          .join(" ");
+        if (liveText) {
+          console.log(`[LiveDebug] model text=${liveText.slice(0, 120)}`);
+          client.send(JSON.stringify({ type: "response", text: liveText }));
+        }
+
+        const outputTranscript = msg.serverContent?.outputTranscription?.text;
+        if (outputTranscript && !liveText) {
+          console.log(`[LiveDebug] output transcript=${outputTranscript.slice(0, 120)}`);
+          client.send(JSON.stringify({ type: "response", text: outputTranscript }));
+        }
+      });
+
+      geminiWs.on("error", (err) => {
+        console.error("[Live] Gemini WS error:", err.message);
+        client.send(JSON.stringify({ type: "error", message: err.message }));
+      });
+
+      geminiWs.on("close", () => {
+        console.log("[Live] Gemini WS closed");
+        if (client.readyState === WebSocket.OPEN) {
+          client.close();
+        }
+      });
+    })
+    .catch((err: Error) => {
+      console.error("[Live] Token error:", err.message);
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ type: "error", message: err.message }));
+        client.close();
+      }
+    });
 
   client.on("message", (data) => {
-    const msg = JSON.parse(data.toString()) as { audio: string };
-    const payload = JSON.stringify({
-      realtimeInput: {
-        audio: { data: msg.audio, mimeType: "audio/pcm;rate=16000" },
-      },
-    });
-    if (ready && geminiWs.readyState === WebSocket.OPEN) {
+    const msg = JSON.parse(data.toString()) as { audio?: string; text?: string };
+    console.log(`[LiveDebug] client message audio=${Boolean(msg.audio)} text=${msg.text?.slice(0, 80) ?? ""}`);
+
+    let payload = "";
+    if (msg.audio) {
+      payload = JSON.stringify({
+        realtimeInput: {
+          audio: { data: msg.audio, mimeType: "audio/pcm;rate=16000" },
+        },
+      });
+    } else if (msg.text?.trim()) {
+      payload = JSON.stringify({
+        realtimeInput: {
+          text: msg.text.trim(),
+        },
+      });
+    }
+
+    if (!payload) return;
+    if (ready && geminiWs?.readyState === WebSocket.OPEN) {
       geminiWs.send(payload);
     } else {
       queue.push(payload);
@@ -501,12 +625,12 @@ wss.on("connection", (client) => {
 
   client.on("close", () => {
     console.log("[Live] Client disconnected");
-    if (geminiWs.readyState === WebSocket.OPEN) {
+    if (geminiWs?.readyState === WebSocket.OPEN) {
       geminiWs.close();
     }
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Backend running on http://localhost:${PORT}`);
+server.listen(Number(PORT), HOST, () => {
+  console.log(`Backend running on ${getServerUrls(PORT).join(" | ")}`);
 });

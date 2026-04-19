@@ -1,7 +1,7 @@
 /**
  * POST /api/process
- * Accepts actual video file(s) + prompt, generates AI composition, runs ffmpeg,
- * returns a URL to the processed video.
+ * Accepts actual video file(s) + prompt, generates AI composition,
+ * renders with Remotion, and returns a URL to the processed video.
  *
  * multipart/form-data:
  *   videos[]       — one or more .mp4/.mov video files
@@ -13,15 +13,21 @@ import multer from "multer";
 import fs from "fs";
 import crypto from "crypto";
 import { generateComposition } from "../services/glm";
-import { processVideo, extractThumbnail, ensureOutputDir } from "../services/videoProcessor";
+import { extractThumbnail } from "../services/videoProcessor";
 import { embedText } from "../services/embedding";
 import { clipStore } from "../services/clipStore";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { ensureRenderDirs, renderRemotionVideo, stageMediaFiles } from "../services/remotionRenderer";
+import {
+  transcribeClipFile,
+  projectTranscriptsToOverlays,
+  probeVideoDurationSeconds,
+  type SourceTranscript,
+} from "../services/transcript";
 
 const router = Router();
 const upload = multer({ dest: "/tmp/hacktour-uploads/" });
 
-ensureOutputDir();
+ensureRenderDirs();
 
 router.post("/process", upload.array("videos"), async (req, res) => {
   const files = req.files as Express.Multer.File[] | undefined;
@@ -55,62 +61,32 @@ router.post("/process", upload.array("videos"), async (req, res) => {
 
   const inputPaths = files.map((f) => f.path);
   const jobId = crypto.randomUUID();
+  let cleanupStagedMedia = () => {};
 
   console.log(`[Process] Job ${jobId}: ${files.length} clip(s), prompt: "${prompt.slice(0, 60)}"`);
 
   try {
-    // Step 1: Transcribe the first video with Gemini to get speech for subtitles
-    let transcript = "";
-    try {
-      if (process.env.GEMINI_API_KEY) {
-        console.log("[Process] Transcribing audio...");
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const gemini = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
-        const base64 = fs.readFileSync(inputPaths[0]).toString("base64");
-        const mimeType = files[0].originalname?.endsWith(".mov") ? "video/quicktime" : "video/mp4";
-        const result = await gemini.generateContent([
-          { inlineData: { mimeType, data: base64 } },
-          `Transcribe EXACTLY what is spoken in this video. Return a JSON array of timed subtitle segments like:
-[{"text":"Hello everyone","startSec":0.5,"endSec":2.1},{"text":"Welcome to my stream","startSec":2.3,"endSec":4.0}]
-Each segment should be 3-8 words max for readable subtitles. Cover ALL speech. Return ONLY the JSON array, no markdown.`,
-        ]);
-        transcript = result.response.text().trim();
-        console.log(`[Process] Transcript segments: ${transcript.slice(0, 200)}`);
-      }
-    } catch (txErr: any) {
-      console.warn("[Process] Transcription failed, continuing without:", txErr.message);
-    }
-
-    // Parse transcript segments from Gemini's JSON response
-    let transcriptSegments: { text: string; startSec: number; endSec: number }[] = [];
-    if (transcript) {
-      try {
-        const arrMatch = transcript.match(/\[[\s\S]*\]/);
-        transcriptSegments = JSON.parse(arrMatch?.[0] ?? "[]");
-        console.log(`[Process] Parsed ${transcriptSegments.length} subtitle segments`);
-      } catch {
-        console.warn("[Process] Could not parse transcript JSON");
-      }
-    }
-
-    // Step 2: AI generates composition plan (structure, transitions, audio — NOT subtitles)
+    // Step 1: AI generates composition plan (structure, transitions, audio — NOT subtitles)
+    //         We need the comp BEFORE we project subtitles so we know trims/rates/offsets.
     console.log("[Process] Generating composition...");
     const composition = await generateComposition({ prompt, clips });
     console.log(`[Process] Composition: ${composition.clips.length} clips, ${composition.overlays.length} overlays, ${composition.transitions.length} transitions`);
 
-    // Step 3: Inject real subtitle overlays from transcript (overrides any AI-generated ones)
-    if (transcriptSegments.length > 0 && /subtitle/i.test(prompt)) {
-      const fps = composition.fps || 30;
-      composition.overlays = transcriptSegments.map((seg) => ({
-        content: seg.text,
-        startFrame: Math.round(seg.startSec * fps),
-        endFrame: Math.round(seg.endSec * fps),
-        x: 0.5,
-        y: 0.88,
-        fontSize: 52,
-        color: "#ffffff",
-      }));
-      console.log(`[Process] Injected ${composition.overlays.length} subtitle overlays from transcript`);
+    // Step 2: Transcribe *every* uploaded source clip in parallel.
+    //         Each source carries its own seconds-based segments — we'll project them
+    //         into the comp timeline after, accounting for trim + playbackRate + offset.
+    const wantsSubtitles = /subtitle|caption/i.test(prompt);
+    let sourceTranscripts: SourceTranscript[] = [];
+    if (wantsSubtitles && process.env.GEMINI_API_KEY) {
+      console.log(`[Process] Transcribing ${files.length} source clip(s) in parallel…`);
+      sourceTranscripts = await Promise.all(
+        files.map(async (file, i) => {
+          const mime = (file.originalname ?? "").toLowerCase().endsWith(".mov") ? "video/quicktime" : "video/mp4";
+          const segments = await transcribeClipFile(file.path, mime);
+          console.log(`[Process]   ${clips[i].name}: ${segments.length} segments`);
+          return { name: clips[i].name, segments };
+        })
+      );
     }
 
     // Inject explicit trimStart/trimEnd from client metadata (overrides AI guess)
@@ -121,10 +97,39 @@ Each segment should be 3-8 words max for readable subtitles. Cover ALL speech. R
       }
     });
 
-    // Step 2: ffmpeg processes the video
-    console.log("[Process] Running ffmpeg...");
-    const outputPath = await processVideo(inputPaths, composition, jobId);
+    // Step 3: Project source-seconds segments onto the comp timeline.
+    //         Replaces any AI-generated overlays when the user asked for subtitles.
+    //         Runs AFTER trim overrides so projection uses the final trim window.
+    if (wantsSubtitles && sourceTranscripts.some((s) => s.segments.length > 0)) {
+      const projected = projectTranscriptsToOverlays(sourceTranscripts, composition);
+      composition.overlays = projected;
+      console.log(`[Process] Projected ${projected.length} subtitle overlays onto comp timeline`);
+    }
+
+    // Step 4: Remotion renders the final video from the JSON composition.
+    console.log("[Process] Staging media for Remotion...");
+    const staged = stageMediaFiles(files, jobId);
+    cleanupStagedMedia = staged.cleanup;
+
+    console.log("[Process] Rendering with Remotion...");
+    const outputPath = await renderRemotionVideo(composition, staged.mediaClips, jobId);
     console.log(`[Process] Done → ${outputPath}`);
+
+    // Step 5: Safety net — ffprobe the rendered file. If its real duration is shorter
+    //         than the planned one (rare, but happens with certain codec edge cases),
+    //         clamp any overlays that would paint past the real end.
+    const realSeconds = probeVideoDurationSeconds(outputPath);
+    if (realSeconds != null) {
+      const plannedSeconds = composition.totalDurationFrames / composition.fps;
+      if (realSeconds + 0.05 < plannedSeconds) {
+        const realFrames = Math.floor(realSeconds * composition.fps);
+        const before = composition.overlays.length;
+        composition.overlays = composition.overlays
+          .map((o) => ({ ...o, endFrame: Math.min(o.endFrame, realFrames) }))
+          .filter((o) => o.endFrame > o.startFrame);
+        console.log(`[Process] Render duration ${realSeconds.toFixed(2)}s < planned ${plannedSeconds.toFixed(2)}s — clamped overlays (${before}→${composition.overlays.length})`);
+      }
+    }
 
     const videoUrl = `/outputs/${jobId}.mp4`;
 
@@ -157,6 +162,8 @@ Each segment should be 3-8 words max for readable subtitles. Cover ALL speech. R
     console.error("[Process] Error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   } finally {
+    cleanupStagedMedia();
+
     // Always clean up uploaded input files
     for (const p of inputPaths) {
       try { fs.unlinkSync(p); } catch {}

@@ -4,8 +4,8 @@
 import { Router } from "express";
 import multer from "multer";
 import fs from "fs";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { photoStore } from "../services/photoStore";
+import { getGeminiModel } from "../services/modelConfig";
 
 const router = Router();
 const upload = multer({ dest: "/tmp/hacktour-photo-uploads/" });
@@ -66,18 +66,14 @@ router.post("/photos/:id/edit", async (req, res) => {
     return;
   }
 
-  const modelName = process.env.GEMINI_IMAGE_MODEL ?? "gemini-2.5-flash-image-preview";
-  console.log(`[PhotoEdit] parent=${parent.id} model=${modelName}`);
+  console.log(`[PhotoEdit] parent=${parent.id} model=imageEdit`);
 
   try {
     const inputBuffer = photoStore.readFileBuffer(parent.filename);
     const base64 = inputBuffer.toString("base64");
     const mimeType = parent.filename.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: modelName });
-
-    const result = await model.generateContent([
+    const result = await getGeminiModel("imageEdit").generateContent([
       { inlineData: { mimeType, data: base64 } },
       CINEMATIC_PROMPT,
     ]);

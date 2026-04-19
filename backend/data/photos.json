@@ -1,0 +1,38 @@
+[
+  {
+    "id": "dcbef241-2c48-46ad-af71-fc93432e963e",
+    "filename": "dcbef241-2c48-46ad-af71-fc93432e963e.jpg",
+    "url": "/api/photos/file/dcbef241-2c48-46ad-af71-fc93432e963e.jpg",
+    "caption": "big smile",
+    "createdAt": "2026-04-18T22:08:02.659Z",
+    "sessionId": "session-1776550071083",
+    "variant": "original"
+  },
+  {
+    "id": "ee7ce97b-91d8-477b-877e-bf412cfd8513",
+    "filename": "ee7ce97b-91d8-477b-877e-bf412cfd8513.jpg",
+    "url": "/api/photos/file/ee7ce97b-91d8-477b-877e-bf412cfd8513.jpg",
+    "caption": "look over your shoulder",
+    "createdAt": "2026-04-18T22:08:12.147Z",
+    "sessionId": "session-1776550071083",
+    "variant": "original"
+  },
+  {
+    "id": "e10c4c1a-9519-458f-acb1-84ef89ec804b",
+    "filename": "e10c4c1a-9519-458f-acb1-84ef89ec804b.jpg",
+    "url": "/api/photos/file/e10c4c1a-9519-458f-acb1-84ef89ec804b.jpg",
+    "caption": "peace sign",
+    "createdAt": "2026-04-18T22:08:15.284Z",
+    "sessionId": "session-1776550071083",
+    "variant": "original"
+  },
+  {
+    "id": "d5658c4e-413b-4bea-b6d9-9f28df0832c5",
+    "filename": "d5658c4e-413b-4bea-b6d9-9f28df0832c5.jpg",
+    "url": "/api/photos/file/d5658c4e-413b-4bea-b6d9-9f28df0832c5.jpg",
+    "caption": "candid laugh",
+    "createdAt": "2026-04-18T22:08:17.804Z",
+    "sessionId": "session-1776550071083",
+    "variant": "original"
+  }
+]

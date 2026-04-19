@@ -1,5 +1,5 @@
 /**
- * LibraryScreen — two sections: Clips (saved AI edits) and Photos (Gemini shoots)
+ * LibraryScreen — two sections: Clips and Images.
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -35,7 +35,7 @@ interface Clip {
   thumbnailUrl?: string;
 }
 
-type Section = "clips" | "photos";
+type Section = "clips" | "images";
 
 export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
   const [section, setSection] = useState<Section>("clips");
@@ -137,7 +137,7 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
 
       {/* Section tabs */}
       <View style={styles.sectionTabs}>
-        {(["clips", "photos"] as Section[]).map((s) => {
+         {(["clips", "images"] as Section[]).map((s) => {
           const active = s === section;
           return (
             <TouchableOpacity
@@ -147,7 +147,7 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
               activeOpacity={0.8}
             >
               <Text style={[styles.sectionTabText, active && styles.sectionTabTextActive]}>
-                {s === "clips" ? "Clips" : "Photos"}
+                {s === "clips" ? "Clips" : "Images"}
               </Text>
             </TouchableOpacity>
           );
@@ -238,7 +238,7 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>📸</Text>
               <Text style={styles.emptyTitle}>No photos yet</Text>
-              <Text style={styles.emptySubtitle}>Say "Gemini, take pictures of me" on the live tab</Text>
+               <Text style={styles.emptySubtitle}>Say "Panda, take my photo" on the live tab</Text>
             </View>
           }
           renderItem={({ item }) => {

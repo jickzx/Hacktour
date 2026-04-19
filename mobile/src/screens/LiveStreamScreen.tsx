@@ -27,14 +27,14 @@ import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
 import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem, processEdit } from "../services/api";
-import { getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings } from "../services/voiceSettings";
+import { BACKEND_URL } from "../services/backendUrl";
+import { ensureHumanLikeVoice, getVoicePresetPatch, getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings, updateVoiceSettings } from "../services/voiceSettings";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 const AUDIO_CHUNK_MS = 3000;
-const FRAME_INTERVAL_MS = 4000;
+const FRAME_INTERVAL_MS = 7000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +54,8 @@ const { height: SCREEN_H } = Dimensions.get("window");
 
 // Wake word variants — "panda", "hey panda", "ok panda", "yo panda", "panda go"
 const WAKE_WORDS = /(?:^|\s)(hey\s+panda|ok\s+panda|yo\s+panda|panda\s+go|panda)(?:\s|,|!|$)/i;
+const PANDA_STOP_RE = /(?:^|\s)(?:hey\s+)?panda\s+stop(?:\s|,|!|\.|$)/i;
+const APP_CONTROL_RE = /\b(go live|end stream|mute|unmute|flip camera|emoji mode|hype|shoutout|countdown|create poll|close poll|go to|open|take my photo|take pictures|photo shoot|what am i wearing|rate my fit|find my outfit|change your voice|change voice|pull up|show .*clip|play .*clip|find .*clip)\b/i;
 
 const PANDA_COMMANDS = [
   { cmd: "hey panda go live", desc: "Start the stream" },
@@ -69,6 +71,7 @@ const PANDA_COMMANDS = [
   { cmd: "hey panda close poll", desc: "Dismiss active poll" },
   { cmd: "hey panda go to edit", desc: "Navigate to edit tab" },
   { cmd: "hey panda take my photo", desc: "Start a guided photo shoot" },
+  { cmd: "hey panda change your voice", desc: "Switch Panda's saved voice" },
   { cmd: "hey panda what am I wearing", desc: "Identify outfit + shop links" },
 ];
 
@@ -119,6 +122,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const [emojiMode, setEmojiMode] = useState(false);
   const [showCommands, setShowCommands] = useState(false);
   const [copilot, setCopilot] = useState<{ suggestedReply: string; chatSummary: string; modAlert: string | null } | null>(null);
+  const [pandaDebug, setPandaDebug] = useState("idle");
   const recentCommentsRef = useRef<string[]>([]);
   const [photoSession, setPhotoSession] = useState<{
     pose: string;
@@ -144,19 +148,39 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   } | null>(null);
   const activeClipRef = useRef<typeof activeClip>(null);
   activeClipRef.current = activeClip;
+  const [pandaLiveOn, setPandaLiveOn] = useState(false);
+  const pandaLiveWsRef = useRef<WebSocket | null>(null);
+  const pandaLiveReadyRef = useRef(false);
+  const pandaLiveQueueRef = useRef<string[]>([]);
+  const pandaLiveActiveRef = useRef(false);
+  const pandaLiveConnectingRef = useRef(false);
+  const pandaSpeechUntilRef = useRef(0);
+  const lastPandaSpeechRef = useRef("");
+  const lastPandaGreetingAtRef = useRef(0);
   isLiveRef.current = isLive;
   activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
 
   useEffect(() => {
-    loadVoiceSettings();
+    loadVoiceSettings().then(() => ensureHumanLikeVoice());
     const unsub = subscribeVoiceSettings(() => {});
     return unsub;
   }, []);
 
   const speak = useCallback((text: string) => {
     const v = getVoiceSettings();
+    pandaSpeechUntilRef.current = Date.now() + 1800;
+    lastPandaSpeechRef.current = text.toLowerCase().replace(/[^a-z0-9\s]/gi, " ").replace(/\s+/g, " ").trim();
     Speech.speak(text, { language: v.language, rate: v.rate, pitch: v.pitch, voice: v.voiceId });
+  }, []);
+
+  const isPandaEcho = useCallback((transcript: string) => {
+    if (Date.now() > pandaSpeechUntilRef.current) return false;
+    const normalized = transcript.toLowerCase().replace(/[^a-z0-9\s]/gi, " ").replace(/\s+/g, " ").trim();
+    if (!normalized) return false;
+    const lastSpeech = lastPandaSpeechRef.current;
+    const protectedLines = new Set(["panda here what s up", "panda out"]);
+    return protectedLines.has(lastSpeech) && normalized === lastSpeech;
   }, []);
 
   const granted = cameraPermission?.granted && micPermission?.granted;
@@ -191,6 +215,16 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     return () => clearInterval(t);
   }, [isLive]);
 
+  useEffect(() => {
+    if (isLive) return;
+    pandaLiveActiveRef.current = false;
+    setPandaLiveOn(false);
+    pandaLiveReadyRef.current = false;
+    pandaLiveQueueRef.current = [];
+    pandaLiveWsRef.current?.close();
+    pandaLiveWsRef.current = null;
+  }, [isLive]);
+
   // ── Copilot insights (runs every 12s while live) ──────────────────────────────
 
   useEffect(() => {
@@ -221,6 +255,174 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
   }, []);
 
+  const debugPanda = useCallback((message: string) => {
+    const stamped = `${new Date().toLocaleTimeString()} ${message}`;
+    setPandaDebug(stamped);
+    console.log(`[PandaDebug] ${stamped}`);
+  }, []);
+
+  const stopPandaLive = useCallback((announce = true) => {
+    debugPanda(`stop requested announce=${announce}`);
+    pandaLiveActiveRef.current = false;
+    pandaLiveConnectingRef.current = false;
+    setPandaLiveOn(false);
+    pandaLiveReadyRef.current = false;
+    pandaLiveQueueRef.current = [];
+    pandaLiveWsRef.current?.close();
+    pandaLiveWsRef.current = null;
+    if (announce) {
+      Speech.stop();
+      speak("Panda out.");
+      pushComment({ id: `panda-stop-${Date.now()}`, user: "🐼 Panda", text: "Panda out.", avatar: "🤖" });
+    }
+  }, [debugPanda, pushComment, speak]);
+
+  const createPandaSetup = useCallback(() => JSON.stringify({
+    setup: {
+      model: "models/gemini-3.1-flash-live-preview",
+      generationConfig: {
+        responseModalities: ["TEXT"],
+      },
+      realtimeInputConfig: {
+        automaticActivityDetection: {
+          disabled: false,
+          silenceDurationMs: 1200,
+          prefixPaddingMs: 300,
+          endOfSpeechSensitivity: "END_SENSITIVITY_UNSPECIFIED",
+          startOfSpeechSensitivity: "START_SENSITIVITY_UNSPECIFIED",
+        },
+        activityHandling: "ACTIVITY_HANDLING_UNSPECIFIED",
+        turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+      },
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
+      systemInstruction: {
+        parts: [{ text: `You are Panda, a live voice assistant inside a streaming app.
+You can talk naturally to the streamer about anything and help with tasks.
+Keep replies short, warm, and direct.
+If the user is just speaking generally, reply conversationally.
+If the user asks for a task, help clearly in plain language.
+Do not use JSON.` }],
+      },
+    },
+  }), []);
+
+  const ensurePandaLive = useCallback(async () => {
+    debugPanda(`ensure session state=${pandaLiveWsRef.current?.readyState ?? "none"}`);
+    pandaLiveActiveRef.current = true;
+    setPandaLiveOn(true);
+    if (pandaLiveWsRef.current && pandaLiveWsRef.current.readyState < WebSocket.CLOSING) {
+      return pandaLiveWsRef.current;
+    }
+    if (pandaLiveConnectingRef.current) return pandaLiveWsRef.current;
+
+    pandaLiveConnectingRef.current = true;
+    try {
+      debugPanda("fetching live token");
+      const response = await fetch(`${BACKEND_URL}/api/live-token`, { method: "POST" });
+      if (!response.ok) throw new Error(`token ${response.status}`);
+      const data = await response.json() as { token: string };
+      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${data.token}`;
+      debugPanda("creating websocket");
+      const ws = new WebSocket(wsUrl);
+      pandaLiveWsRef.current = ws;
+      pandaLiveReadyRef.current = false;
+      ws.onopen = () => {
+        debugPanda("socket open sending setup");
+        ws.send(createPandaSetup());
+      };
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(String(event.data)) as {
+            setupComplete?: boolean;
+            serverContent?: {
+              outputTranscription?: { text?: string };
+              modelTurn?: { parts?: Array<{ text?: string }> };
+            };
+          };
+          debugPanda(`message keys=${Object.keys(msg).join(",")}`);
+          if (msg.setupComplete) {
+            pandaLiveReadyRef.current = true;
+            pandaLiveConnectingRef.current = false;
+            debugPanda(`ready queued=${pandaLiveQueueRef.current.length}`);
+            const queue = [...pandaLiveQueueRef.current];
+            pandaLiveQueueRef.current = [];
+            queue.forEach((queued) => ws.send(JSON.stringify({ realtimeInput: { text: queued } })));
+            return;
+          }
+
+          const liveText = msg.serverContent?.modelTurn?.parts
+            ?.map((part) => part.text?.trim())
+            .filter(Boolean)
+            .join(" ");
+          const outputTranscript = msg.serverContent?.outputTranscription?.text?.trim();
+          const responseText = liveText || outputTranscript;
+          if (responseText) {
+            debugPanda(`response ${responseText.slice(0, 60)}`);
+            speak(responseText);
+            pushComment({
+              id: `panda-live-${Date.now()}`,
+              user: "🐼 Panda",
+              text: responseText,
+              avatar: "🤖",
+            });
+          }
+        } catch (err) {
+          debugPanda("parse error");
+          console.warn("[Panda Live] Parse error:", err);
+        }
+      };
+      ws.onerror = (err) => {
+        debugPanda("socket error");
+        console.warn("[Panda Live] Error:", err);
+      };
+      ws.onclose = () => {
+        debugPanda("socket closed");
+        pandaLiveWsRef.current = null;
+        pandaLiveConnectingRef.current = false;
+        pandaLiveReadyRef.current = false;
+        pandaLiveQueueRef.current = [];
+        pandaLiveActiveRef.current = false;
+        setPandaLiveOn(false);
+      };
+    } catch (err) {
+      debugPanda(`token fetch failed ${err instanceof Error ? err.message : "unknown"}`);
+      pandaLiveActiveRef.current = false;
+      pandaLiveConnectingRef.current = false;
+      setPandaLiveOn(false);
+    }
+
+    return pandaLiveWsRef.current;
+  }, [createPandaSetup, debugPanda, pushComment, speak]);
+
+  const sendToPandaLive = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    debugPanda(`send text ready=${pandaLiveReadyRef.current} text=${trimmed.slice(0, 60)}`);
+    pandaLiveQueueRef.current.push(trimmed);
+    if (!pandaLiveReadyRef.current) debugPanda("queued text turn");
+    void ensurePandaLive().then((ws) => {
+      if (!ws || !pandaLiveReadyRef.current || ws.readyState !== WebSocket.OPEN) return;
+      const queue = [...pandaLiveQueueRef.current];
+      pandaLiveQueueRef.current = [];
+      queue.forEach((queued) => ws.send(JSON.stringify({ realtimeInput: { text: queued } })));
+    });
+  }, [debugPanda, ensurePandaLive]);
+
+  const togglePandaLive = useCallback(() => {
+    if (pandaLiveActiveRef.current) {
+      stopPandaLive();
+      return;
+    }
+
+    const greeting = "Panda here, what's up?";
+    debugPanda("button activation");
+    speak(greeting);
+    pushComment({ id: `panda-button-${Date.now()}`, user: "🐼 Panda", text: greeting, avatar: "🤖" });
+    void ensurePandaLive();
+  }, [debugPanda, ensurePandaLive, pushComment, speak, stopPandaLive]);
+
   const pushCommentsWithDelay = useCallback((
     newComments: Array<{ user: string; text: string; avatar: string }>
   ) => {
@@ -230,7 +432,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         pushComment({ id: `ai-${Date.now()}-${i}-${Math.random().toString(36).slice(2)}`, ...c });
         setLatestAiComment(c.text);
         recentCommentsRef.current = [...recentCommentsRef.current.slice(-40), `${c.user}: ${c.text}`];
-      }, i * (400 + Math.random() * 300));
+      }, i * (1100 + Math.random() * 500));
     });
   }, [pushComment]);
 
@@ -331,6 +533,27 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     }
   }, [pushComment]);
 
+  const handleVoiceChange = useCallback(async (action: AssistantAction) => {
+    const patch: { preset?: AssistantAction["preset"]; language?: string } = {};
+    if (action.preset) patch.preset = action.preset;
+    if (action.language) patch.language = action.language;
+
+    const next = await updateVoiceSettings({
+      ...(action.preset ? getVoicePresetPatch(action.preset) : {}),
+      ...(action.language ? { language: action.language, voiceId: undefined } : {}),
+    });
+
+    const summary = [patch.preset, patch.language].filter(Boolean).join(" ") || "new voice";
+    pushComment({ id: `voice-${Date.now()}`, user: "🐼 Panda", text: `Saved ${summary} for next time.`, avatar: "🤖" });
+    Speech.stop();
+    Speech.speak("Voice updated. I'll keep this one for next time.", {
+      language: next.language,
+      rate: next.rate,
+      pitch: next.pitch,
+      voice: next.voiceId,
+    });
+  }, [pushComment]);
+
   // ── Assistant: handle pendingAction from App.tsx ─────────────────────────────
 
   useEffect(() => {
@@ -351,6 +574,9 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       case "countdown":    triggerCountdown(pendingAction.seconds ?? 5); break;
       case "pull_up_clip": if (pendingAction.query) handlePullUpClip(pendingAction.query); break;
       case "clip":         handleClip(); break;
+      case "take_photos":  if (pendingAction.poses?.length) startPhotoSession(pendingAction.poses); break;
+      case "identify_outfit": scanOutfit(); break;
+      case "change_voice": handleVoiceChange(pendingAction); break;
     }
     onPendingActionConsumed();
   }, [pendingAction]); // eslint-disable-line
@@ -366,9 +592,42 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     const rawCommand = afterWake || "hello";
     // In emoji mode, append instruction so Zee replies in emojis
     const command = emojiMode ? `${rawCommand} (reply using emojis only, no words)` : rawCommand;
+    const greeting = "Panda here, what's up?";
+    const isFreshWake = !pandaLiveActiveRef.current;
+    const hasExplicitCommand = afterWake.length > 0;
+    const shouldRunActionAssistant = hasExplicitCommand && APP_CONTROL_RE.test(afterWake);
+    const canSpeakGreeting = Date.now() - lastPandaGreetingAtRef.current > 10_000;
 
     console.log(`[Panda] Wake word detected, command: "${rawCommand}"`);
     setAssistantActive(true);
+
+    if (isFreshWake) {
+      if (canSpeakGreeting) {
+        lastPandaGreetingAtRef.current = Date.now();
+        speak(greeting);
+      }
+      pushComment({
+        id: `panda-greet-${Date.now()}`,
+        user: "🐼 Panda",
+        text: greeting,
+        avatar: "🤖",
+      });
+
+      if (!hasExplicitCommand) {
+        ensurePandaLive();
+        setAssistantActive(false);
+        return;
+      }
+    }
+
+    if (hasExplicitCommand) {
+      sendToPandaLive(rawCommand);
+    }
+
+    if (!shouldRunActionAssistant) {
+      setAssistantActive(false);
+      return;
+    }
 
     try {
       const res = await fetch(`${BACKEND_URL}/api/assistant`, {
@@ -379,17 +638,16 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       const data = await res.json();
       console.log(`[Panda] Response: "${data.response}", Action:`, data.action);
 
-      // Speak the response
-      if (data.response) speak(data.response);
-
-      // Show as a special comment
-      pushComment({
-        id: `zee-${Date.now()}`,
-        user: "🐼 Panda",
-        text: data.response ?? "...",
-        avatar: "🤖",
-        isTranscript: false,
-      });
+      // Only surface the structured assistant reply when it triggered an action.
+      if (data.action && data.action.type !== "none" && data.response) {
+        pushComment({
+          id: `zee-${Date.now()}`,
+          user: "🐼 Panda",
+          text: data.response,
+          avatar: "🤖",
+          isTranscript: false,
+        });
+      }
 
       // Fire the action
       if (data.action && data.action.type !== "none") {
@@ -400,7 +658,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     } finally {
       setAssistantActive(false);
     }
-  }, [pushComment, onAssistantAction, emojiMode]);
+  }, [pushComment, onAssistantAction, emojiMode, sendToPandaLive, speak]);
 
   // ── Poll detection via Gemini function calling ────────────────────────────────
   // Cooldown: don't allow a new poll within 25s of the last one firing
@@ -440,9 +698,25 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       const transcript: string = data.transcript ?? "";
       if (!transcript) return;
 
+      if (isPandaEcho(transcript)) {
+        console.log(`[Panda] Ignoring self-echo: ${transcript}`);
+        return;
+      }
+
       console.log(`[Streamer] ${transcript}`);
       pushComment({ id: `transcript-${Date.now()}`, user: "🎙 you (live)", text: transcript, avatar: "🎤", isTranscript: true });
       transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
+
+      if (PANDA_STOP_RE.test(transcript) && pandaLiveActiveRef.current) {
+        stopPandaLive();
+        return;
+      }
+
+      // While Panda is already active, ignore repeated wake words entirely.
+      if (pandaLiveActiveRef.current && WAKE_WORDS.test(transcript)) {
+        console.log(`[Panda] Ignoring repeated wake word: ${transcript}`);
+        return;
+      }
 
       // During a photo session, listen for "ready" / "stop" and swallow everything else
       if (photoSessionRef.current && readyResolverRef.current) {
@@ -460,11 +734,15 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
       if (WAKE_WORDS.test(transcript)) { triggerAssistant(transcript); return; }
 
+      if (pandaLiveActiveRef.current) {
+        sendToPandaLive(transcript);
+      }
+
       detectPoll(transcript);
     } catch (err) {
       console.warn("[Audio] Error:", err);
     }
-  }, [pushComment]);
+  }, [detectPoll, isPandaEcho, pushComment, sendToPandaLive, stopPandaLive, triggerAssistant]);
 
   const audioLoop = useCallback(async () => {
     const perm = await requestRecordingPermissionsAsync();
@@ -581,15 +859,17 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       // 1. Announce pose + ask for confirmation
       setPhotoSession({ pose, index: i, total: poses.length, phase: "pose" });
       const firstLine = i === 0
-        ? `Pose ${i + 1}: ${pose}. Say "ready" when you want me to snap it.`
-        : `Nice! Now: ${pose}. Say "ready" when you're set.`;
+        ? `Pose ${i + 1}: ${pose}. I'll ask when the shot is ready, then say yes.`
+        : `Nice! Now: ${pose}. Hold it and say yes when you're ready for the shot.`;
       speak(firstLine);
       pushComment({
         id: `pose-${Date.now()}-${i}`,
-        user: "📸 Gemini",
-        text: `Pose ${i + 1}/${poses.length}: ${pose} — say "ready"`,
+        user: "📸 Panda",
+        text: `Pose ${i + 1}/${poses.length}: ${pose} — say yes when you're ready`,
         avatar: "✨",
       });
+
+      speak("Ready to take the photo. Say yes when you want me to snap it.");
 
       // 2. Wait for the streamer to say "yes"/"ready" (or "stop")
       setPhotoSession({ pose, index: i, total: poses.length, phase: "waiting" });
@@ -597,14 +877,14 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       if (!photoSessionRef.current) break;
       if (result === "stop") {
         speak("No worries, stopping the shoot.");
-        pushComment({ id: `pose-stop-${Date.now()}`, user: "📸 Gemini", text: "stopped by streamer", avatar: "✨" });
+        pushComment({ id: `pose-stop-${Date.now()}`, user: "📸 Panda", text: "stopped by streamer", avatar: "✨" });
         stoppedEarly = true;
         break;
       }
       if (result === "timeout") {
         speak("Alright, taking it anyway — say cheese!");
       } else {
-        speak("Got it!");
+        speak("Snapping it now!");
       }
 
       // 3. Capture + flash
@@ -638,7 +918,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       speak(`Got ${savedOriginals.length} shots. Making them cinematic, one sec.`);
       pushComment({
         id: `edit-start-${Date.now()}`,
-        user: "📸 Gemini",
+        user: "📸 Panda",
         text: `Editing ${savedOriginals.length} photos…`,
         avatar: "✨",
       });
@@ -663,10 +943,10 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     // 5. Wrap up
     const total = savedOriginals.length;
     if (total > 0) {
-      speak(`Done! Your ${total} original shots and cinematic edits are in the library.`);
+      speak(`Done! Your ${total} original shots and cinematic edits are in the library images tab.`);
       pushComment({
         id: `pose-done-${Date.now()}`,
-        user: "📸 Gemini",
+        user: "📸 Panda",
         text: `Saved ${total} originals + ${total} cinematic edits`,
         avatar: "✨",
       });
@@ -705,18 +985,18 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
 
       if (!items.length) {
         speak("Hmm, I can't see any clothes clearly. Try stepping back?");
-        pushComment({ id: `fit-empty-${Date.now()}`, user: "👗 Gemini", text: "Can't see the fit clearly — try stepping back", avatar: "✨" });
+        pushComment({ id: `fit-empty-${Date.now()}`, user: "👗 Panda", text: "Can't see the fit clearly — try stepping back", avatar: "✨" });
       } else {
         const intro = items.length === 1
           ? `Spotted your ${items[0].label.toLowerCase()}. Dropping a link in chat.`
           : `Spotted ${items.length} pieces. Dropping links in chat.`;
         speak(intro);
-        pushComment({ id: `fit-head-${Date.now()}`, user: "👗 Gemini", text: intro, avatar: "✨" });
+        pushComment({ id: `fit-head-${Date.now()}`, user: "👗 Panda", text: intro, avatar: "✨" });
         items.forEach((item, i) => {
           setTimeout(() => {
             pushComment({
               id: `fit-${Date.now()}-${i}`,
-              user: "👗 Gemini",
+               user: "👗 Panda",
               text: `${item.label} → tap to shop`,
               avatar: "🛍",
               link: item.searchUrl,
@@ -726,7 +1006,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       }
     } catch (err) {
       console.warn("[Outfit] Error:", err);
-      pushComment({ id: `fit-err-${Date.now()}`, user: "👗 Gemini", text: "Outfit scan failed — try again", avatar: "✨" });
+      pushComment({ id: `fit-err-${Date.now()}`, user: "👗 Panda", text: "Outfit scan failed — try again", avatar: "✨" });
     } finally {
       setOutfitScanning(false);
       outfitBusyRef.current = false;
@@ -1036,10 +1316,16 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
           </View>
         )}
 
+        {pandaLiveOn && (
+          <View style={[styles.statusBanner, styles.zeeBanner, { top: 104 }]} pointerEvents="none">
+            <Text style={styles.zeeText}>🐼 {pandaDebug}</Text>
+          </View>
+        )}
+
         {/* Outfit scan banner */}
         {outfitScanning && (
           <View style={[styles.statusBanner, styles.zeeBanner]} pointerEvents="none">
-            <Text style={styles.zeeText}>👗 Gemini is scanning your fit…</Text>
+            <Text style={styles.zeeText}>👗 Panda is scanning your fit…</Text>
           </View>
         )}
 
@@ -1139,11 +1425,19 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
                   <Text style={styles.sideBtnIcon}>EMO</Text>
                 </TouchableOpacity>
               )}
+              {isLive && (
+                <TouchableOpacity
+                  style={[styles.sideBtn, pandaLiveOn && styles.sideBtnActive]}
+                  onPress={togglePandaLive}
+                >
+                  <Text style={styles.sideBtnIcon}>{pandaLiveOn ? "PANDA ON" : "PANDA"}</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 style={[styles.sideBtn, showCommands && styles.sideBtnActive]}
                 onPress={() => setShowCommands(v => !v)}
               >
-                <Text style={styles.sideBtnIcon}>🐼</Text>
+                <Text style={styles.sideBtnIcon}>HELP</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.sideBtn, styles.sideBtnClip, isClipping && styles.sideBtnRed]}
@@ -1237,7 +1531,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         {showCommands && (
           <View style={styles.commandsSheet}>
             <View style={styles.commandsHeader}>
-              <Text style={styles.commandsTitle}>🐼 Panda Commands</Text>
+              <Text style={styles.commandsTitle}>Voice Commands</Text>
               <TouchableOpacity onPress={() => setShowCommands(false)}>
                 <Text style={styles.commandsClose}>✕</Text>
               </TouchableOpacity>
