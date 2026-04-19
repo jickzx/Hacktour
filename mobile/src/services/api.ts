@@ -120,6 +120,36 @@ export interface OutfitItem {
   searchUrl: string;
 }
 
+export interface PoseCoachResult {
+  pose: string;
+  readyToShoot: boolean;
+  coaching: string;
+}
+
+/** Ask the backend pose coach to look at a frame and say what to do next. */
+export async function poseCoach(params: {
+  base64: string;
+  shotIndex: number;
+  totalShots: number;
+  auto: boolean;
+  previousPose?: string;
+}): Promise<PoseCoachResult> {
+  const form = new FormData();
+  form.append("base64", params.base64);
+  form.append("shotIndex", String(params.shotIndex));
+  form.append("totalShots", String(params.totalShots));
+  form.append("auto", params.auto ? "1" : "0");
+  if (params.previousPose) form.append("previousPose", params.previousPose);
+  const res = await fetch(`${API_BASE}/api/pose-coach`, { method: "POST", body: form });
+  const data = await safeJson(res);
+  if (!res.ok) throw new Error(data.error || `API error: ${res.status}`);
+  return {
+    pose: String(data.pose ?? "natural smile"),
+    readyToShoot: Boolean(data.readyToShoot),
+    coaching: String(data.coaching ?? "Hold it there"),
+  };
+}
+
 /** Sends a photo to the outfit identifier endpoint */
 export async function identifyOutfit(uri: string): Promise<OutfitItem[]> {
   const form = new FormData();

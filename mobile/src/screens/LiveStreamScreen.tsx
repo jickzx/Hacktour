@@ -30,7 +30,7 @@ import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
 import ProductOverlay from "../components/ProductOverlay";
-import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem, processEdit } from "../services/api";
+import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem, processEdit, poseCoach } from "../services/api";
 import { findProduct, ProductItem } from "../services/product";
 import { BACKEND_URL } from "../services/backendUrl";
 import { ensureHumanLikeVoice, getVoicePresetPatch, getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings, updateVoiceSettings } from "../services/voiceSettings";
@@ -179,7 +179,12 @@ const { height: SCREEN_H } = Dimensions.get("window");
 const PANDA_ALIASES = "p[ao]nd[ao]|p[ao]nt[ao]|b[ao]nd[ao]";
 const WAKE_WORDS = new RegExp(`\\b(?:${PANDA_ALIASES})\\b`, "i");
 const PANDA_STOP_RE = new RegExp(`\\b(?:${PANDA_ALIASES})\\s+stop\\b`, "i");
-const APP_CONTROL_RE = /\b(go live|end stream|mute|unmute|flip camera|emoji mode|hype|shoutout|countdown|create poll|close poll|go to|open|take my photo|take pictures|photo shoot|what am i wearing|rate my fit|find my outfit|change your voice|change voice|pull up|show .*clip|play .*clip|find .*clip|nike|adidas|puma|jordan|air max|samba|shoe|shoes|sneaker|sneakers|hoodie|shirt|jacket|bag|hat)\b/i;
+// Legacy keyword pre-filter — replaced by a Gemini 3.1 flash-lite classifier
+// in /api/assistant. Any phrase that follows the wake word is now routed to
+// the model for intent classification, so we don't need a hand-maintained
+// regex that has to be updated every time we add a command. Left here as a
+// reference until the new classifier has been in production for a while.
+// const APP_CONTROL_RE = /\b(go live|end stream|mute|unmute|flip camera|emoji mode|hype|shoutout|countdown|create poll|close poll|go to|open|take my photo|take pictures|photo shoot|what am i wearing|rate my fit|find my outfit|change your voice|change voice|pull up|show .*clip|play .*clip|find .*clip|nike|adidas|puma|jordan|air max|samba|shoe|shoes|sneaker|sneakers|hoodie|shirt|jacket|bag|hat)\b/i;
 
 const PANDA_COMMANDS = [
   { cmd: "hey panda go live", desc: "Start the stream" },
@@ -204,6 +209,13 @@ const PANDA_COMMANDS = [
 const MAX_POSES = 10;
 // How long to wait for the streamer to say "yes/ready" before auto-snapping
 const READY_TIMEOUT_MS = 22000;
+// From the moment Panda starts the "3, 2, 1, smile!" countdown to the actual
+// shutter. Long enough that the TTS finishes before the shot, so audio lines
+// up with the flash instead of landing after.
+const PHOTO_COUNTDOWN_MS = 4000;
+// Hard cap on how many coach iterations we run before taking the shot anyway.
+// Stops the loop from running forever if the subject never settles into a pose.
+const POSE_COACH_MAX_ATTEMPTS = 8;
 // Phrases that count as "take the shot"
 const READY_RE = /\b(yes|yep|yeah|yup|ready|go|shoot|take it|take the (shot|photo|picture)|do it|i'?m ready|ok|okay|sure)\b/i;
 // Phrases that end the photo session early
@@ -256,6 +268,8 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     phase: "pose" | "waiting" | "capturing" | "editing" | "done";
   } | null>(null);
   const [flashOpacity] = useState(new Animated.Value(0));
+  // Glowing white border shown while Panda is counting down + capturing a shot.
+  const [glowOpacity] = useState(new Animated.Value(0));
   const photoSessionRef = useRef(false);
   const readyResolverRef = useRef<((result: "ready" | "stop" | "timeout") => void) | null>(null);
   const [outfitScanning, setOutfitScanning] = useState(false);
@@ -812,7 +826,13 @@ Rules:
       case "pull_up_clip": if (pendingAction.query) handlePullUpClip(pendingAction.query); break;
       case "pull_up_product": if (pendingAction.query) handlePullUpProduct(pendingAction.query); break;
       case "clip":         handleClip(); break;
-      case "take_photos":  if (pendingAction.poses?.length) startPhotoSession(pendingAction.poses); break;
+      case "take_photos":
+        startPhotoSession({
+          count: pendingAction.count,
+          auto: pendingAction.auto,
+          poses: pendingAction.poses,
+        });
+        break;
       case "identify_outfit": scanOutfit(); break;
       case "change_voice": handleVoiceChange(pendingAction); break;
     }
@@ -833,7 +853,12 @@ Rules:
     const greeting = "Panda here, what's up?";
     const isFreshWake = !pandaLiveActiveRef.current;
     const hasExplicitCommand = afterWake.length > 0;
-    const shouldRunActionAssistant = hasExplicitCommand && APP_CONTROL_RE.test(afterWake);
+    // Previously we gated /api/assistant on a local keyword regex so casual
+    // chat wouldn't trigger an action call. The backend now runs a Gemini
+    // 3.1 flash-lite classifier that returns type="none" for anything that
+    // isn't an app command, so we can safely route every wake-word turn.
+    // const shouldRunActionAssistant = hasExplicitCommand && APP_CONTROL_RE.test(afterWake);
+    const shouldRunActionAssistant = hasExplicitCommand;
     const canSpeakGreeting = Date.now() - lastPandaGreetingAtRef.current > 10_000;
 
     console.log(`[Panda] Wake word detected, command: "${rawCommand}"`);
@@ -1144,11 +1169,48 @@ Rules:
       }, timeoutMs);
     }), []);
 
-  const startPhotoSession = useCallback(async (rawPoses: string[]) => {
+  // Speak "3, 2, 1, smile!", fade a white glowing border in over the countdown
+  // window, hold it through the shutter, then fade out. The countdown duration
+  // is kept at PHOTO_COUNTDOWN_MS so the TTS lines up with the shot.
+  const runCountdownAndCapture = useCallback(async (
+    pose: string,
+    index: number,
+    total: number,
+    sessionId: string,
+  ): Promise<{ id: string; pose: string } | null> => {
+    setPhotoSession({ pose, index, total, phase: "capturing" });
+    speak("Three, two, one, smile!");
+    Animated.timing(glowOpacity, { toValue: 1, duration: PHOTO_COUNTDOWN_MS - 300, useNativeDriver: true }).start();
+    await new Promise((r) => setTimeout(r, PHOTO_COUNTDOWN_MS));
+    if (!photoSessionRef.current) {
+      Animated.timing(glowOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+      return null;
+    }
+    try {
+      const pic = await cameraRef.current?.takePictureAsync({ quality: 0.85, skipProcessing: true });
+      Animated.sequence([
+        Animated.timing(flashOpacity, { toValue: 0.9, duration: 80, useNativeDriver: true }),
+        Animated.timing(flashOpacity, { toValue: 0, duration: 260, useNativeDriver: true }),
+      ]).start();
+      Animated.timing(glowOpacity, { toValue: 0, duration: 500, useNativeDriver: true }).start();
+      if (pic?.uri) {
+        const saved = await uploadPhoto({ uri: pic.uri, caption: pose, sessionId });
+        return { id: saved.id, pose };
+      }
+    } catch (err) {
+      console.warn("[Photos] Capture error:", err);
+      Animated.timing(glowOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+    }
+    return null;
+  }, [speak, flashOpacity, glowOpacity]);
+
+  const startPhotoSession = useCallback(async (opts: { count?: number; auto?: boolean; poses?: string[] }) => {
     if (photoSessionRef.current) return;
-    const poses = rawPoses.slice(0, MAX_POSES);
+    const totalShots = Math.max(1, Math.min(MAX_POSES, Math.floor(opts.count ?? opts.poses?.length ?? 5)));
+    const auto = Boolean(opts.auto);
+    const dictatedPoses = opts.poses?.length ? opts.poses.slice(0, totalShots) : null;
     photoSessionRef.current = true;
-    console.log(`[Photos] Session starting — ${poses.length} poses (max ${MAX_POSES})`);
+    console.log(`[Photos] Session starting — ${totalShots} shots, auto=${auto}, dictated=${Boolean(dictatedPoses)}`);
 
     // Pause the analyse video loop so we can use takePictureAsync
     const wasVideoLooping = isVideoLoopRef.current;
@@ -1163,58 +1225,88 @@ Rules:
     const savedOriginals: { id: string; pose: string }[] = [];
     let stoppedEarly = false;
 
-    for (let i = 0; i < poses.length; i++) {
-      if (!photoSessionRef.current) break;
-      const pose = poses[i];
+    speak(auto
+      ? `Alright, let's get ${totalShots} shots. I'll countdown and snap when you look ready.`
+      : `Alright, ${totalShots} shots coming up. Say yes when you want me to take each one.`);
 
-      // 1. Announce pose + ask for confirmation
-      setPhotoSession({ pose, index: i, total: poses.length, phase: "pose" });
-      const firstLine = i === 0
-        ? `Pose ${i + 1}: ${pose}. I'll ask when the shot is ready, then say yes.`
-        : `Nice! Now: ${pose}. Hold it and say yes when you're ready for the shot.`;
-      speak(firstLine);
+    for (let i = 0; i < totalShots; i++) {
+      if (!photoSessionRef.current) break;
+
+      let currentPose = dictatedPoses?.[i] ?? "";
+      let shouldTake = false;
+      let attempts = 0;
+
+      setPhotoSession({ pose: currentPose || "getting ready…", index: i, total: totalShots, phase: "pose" });
       pushComment({
         id: `pose-${Date.now()}-${i}`,
         user: "📸 Panda",
-        text: `Pose ${i + 1}/${poses.length}: ${pose} — say yes when you're ready`,
+        text: `Shot ${i + 1}/${totalShots} — ${auto ? "I'll snap when the pose looks good" : "say yes when you're set"}`,
         avatar: "✨",
       });
 
-      speak("Ready to take the photo. Say yes when you want me to snap it.");
+      // Live coach loop: grab a frame, ask Gemini, speak guidance, repeat until ready-to-shoot
+      while (!shouldTake && photoSessionRef.current && attempts < POSE_COACH_MAX_ATTEMPTS) {
+        attempts += 1;
+        let coachReady = false;
+        try {
+          const frame = await cameraRef.current?.takePictureAsync({ quality: 0.35, base64: true, skipProcessing: true });
+          if (frame?.base64) {
+            const coach = await poseCoach({
+              base64: frame.base64,
+              shotIndex: i,
+              totalShots,
+              auto,
+              previousPose: currentPose,
+            });
+            if (!dictatedPoses) currentPose = coach.pose;
+            coachReady = coach.readyToShoot;
+            setPhotoSession({ pose: currentPose || coach.pose, index: i, total: totalShots, phase: coachReady ? "waiting" : "pose" });
+            speak(coach.coaching);
+          }
+        } catch (err) {
+          console.warn("[Photos] Coach error:", err);
+        }
 
-      // 2. Wait for the streamer to say "yes"/"ready" (or "stop")
-      setPhotoSession({ pose, index: i, total: poses.length, phase: "waiting" });
-      const result = await waitForReady(READY_TIMEOUT_MS);
-      if (!photoSessionRef.current) break;
-      if (result === "stop") {
+        if (!photoSessionRef.current) break;
+
+        if (coachReady && auto) {
+          shouldTake = true;
+          break;
+        }
+
+        if (coachReady) {
+          // Interactive: ask the streamer to confirm verbally
+          speak("Looking great — say yes when you want the shot.");
+          setPhotoSession({ pose: currentPose, index: i, total: totalShots, phase: "waiting" });
+          const result = await waitForReady(READY_TIMEOUT_MS);
+          if (!photoSessionRef.current) break;
+          if (result === "stop") { stoppedEarly = true; break; }
+          if (result === "ready") { shouldTake = true; break; }
+          // timeout: let the coach loop re-evaluate the frame
+        } else {
+          // Not ready yet — wait a short beat so TTS finishes + user has time to adjust
+          const result = await waitForReady(2800);
+          if (!photoSessionRef.current) break;
+          if (result === "stop") { stoppedEarly = true; break; }
+          // "ready" from user here = force-take even though coach wasn't sure
+          if (result === "ready") { shouldTake = true; break; }
+        }
+      }
+
+      if (stoppedEarly) {
         speak("No worries, stopping the shoot.");
         pushComment({ id: `pose-stop-${Date.now()}`, user: "📸 Panda", text: "stopped by streamer", avatar: "✨" });
-        stoppedEarly = true;
         break;
       }
-      if (result === "timeout") {
-        speak("Alright, taking it anyway — say cheese!");
-      } else {
-        speak("Snapping it now!");
+
+      if (!shouldTake) {
+        // Max attempts hit — take the shot anyway so we never stall forever
+        speak("Taking it anyway — hold still.");
       }
 
-      // 3. Capture + flash
-      setPhotoSession({ pose, index: i, total: poses.length, phase: "capturing" });
-      await new Promise((r) => setTimeout(r, 550));
-      try {
-        const pic = await cameraRef.current?.takePictureAsync({ quality: 0.85, skipProcessing: true });
-        Animated.sequence([
-          Animated.timing(flashOpacity, { toValue: 0.9, duration: 80, useNativeDriver: true }),
-          Animated.timing(flashOpacity, { toValue: 0, duration: 260, useNativeDriver: true }),
-        ]).start();
-        if (pic?.uri) {
-          const saved = await uploadPhoto({ uri: pic.uri, caption: pose, sessionId });
-          savedOriginals.push({ id: saved.id, pose });
-        }
-      } catch (err) {
-        console.warn("[Photos] Capture error:", err);
-      }
-      // Small breathing room before the next prompt
+      const saved = await runCountdownAndCapture(currentPose || "candid", i, totalShots, sessionId);
+      if (saved) savedOriginals.push(saved);
+      // Small breathing room before the next pose
       await new Promise((r) => setTimeout(r, 600));
     }
 
@@ -1270,7 +1362,7 @@ Rules:
       isVideoLoopRef.current = true;
       videoLoop();
     }
-  }, [speak, pushComment, flashOpacity, waitForReady]); // eslint-disable-line
+  }, [speak, pushComment, waitForReady, runCountdownAndCapture]); // eslint-disable-line
 
   // ── Outfit scan: capture a frame and post shopping links to chat ─────────────
 
@@ -1695,6 +1787,7 @@ Rules:
           </View>
         )}
         <Animated.View pointerEvents="none" style={[styles.flash, { opacity: flashOpacity }]} />
+        <Animated.View pointerEvents="none" style={[styles.photoGlow, { opacity: glowOpacity }]} />
 
         {/* Transcribe status banner */}
         {!assistantActive && (isTranscribing || transcribeStatus.length > 0) && (
@@ -2074,6 +2167,17 @@ const styles = StyleSheet.create({
   flash: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "#fff",
+  },
+  // Thick white glowing border that pulses up while Panda counts down to a shot.
+  photoGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderWidth: 8,
+    borderColor: "#fff",
+    borderRadius: 36,
+    shadowColor: "#fff",
+    shadowOpacity: 1,
+    shadowRadius: 32,
+    shadowOffset: { width: 0, height: 0 },
   },
 
   // Permission
