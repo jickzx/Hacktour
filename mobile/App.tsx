@@ -15,7 +15,7 @@ import { COLORS } from "./src/constants/theme";
 import { loadVoiceSettings } from "./src/services/voiceSettings";
 
 export type AssistantAction = {
-  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "create_poll" | "close_poll" | "emoji_mode" | "hype" | "shoutout" | "countdown" | "pull_up_clip" | "none";
+  type: "navigate_tab" | "go_live" | "end_stream" | "mute" | "unmute" | "flip_camera" | "create_poll" | "close_poll" | "emoji_mode" | "hype" | "shoutout" | "countdown" | "pull_up_clip" | "clip" | "none";
   tab?: Tab;
   poll?: { question: string; options: string[] };
   /** for shoutout: the username to shout out */
@@ -71,7 +71,7 @@ export default function App() {
         />
       </View>
       <View style={[styles.screen, activeTab !== "library" && styles.hidden]}>
-        <LibraryScreen />
+        <LibraryScreen isFocused={activeTab === "library"} />
       </View>
       <View style={[styles.screen, activeTab !== "settings" && styles.hidden]}>
         <SettingsScreen />

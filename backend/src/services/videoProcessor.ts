@@ -40,13 +40,13 @@ export function ensureOutputDir() {
 }
 
 /** Extract a single JPEG frame from a video at `seekSecs` seconds. Returns the output path. */
-export async function extractThumbnail(videoPath: string, jobId: string, seekSecs = 2): Promise<string> {
+export async function extractThumbnail(videoPath: string, jobId: string, seekSecs = 0): Promise<string> {
   ensureOutputDir();
   const outPath = path.join(THUMB_DIR, `${jobId}.jpg`);
   return new Promise((resolve, reject) => {
-    ffmpeg(videoPath)
-      .seekInput(seekSecs)
-      .outputOptions([
+    const cmd = ffmpeg(videoPath);
+    if (seekSecs > 0) cmd.seekInput(seekSecs);
+    cmd.outputOptions([
         "-vframes", "1",
         "-vf", "scale=540:960:force_original_aspect_ratio=decrease,pad=540:960:(ow-iw)/2:(oh-ih)/2:color=black",
         "-f", "image2",

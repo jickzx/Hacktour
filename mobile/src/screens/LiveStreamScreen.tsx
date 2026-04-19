@@ -140,8 +140,10 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   // Resolve fn to interrupt the current recordAsync and get its URI immediately
   const stopCurrentBufferRef = useRef<(() => void) | null>(null);
   const [activeClip, setActiveClip] = useState<{
-    id: string; title: string; sourceVideoUrl: string; durationSeconds: number; score: number;
+    id: string; mountKey: string; title: string; sourceVideoUrl: string; durationSeconds: number; score: number;
   } | null>(null);
+  const activeClipRef = useRef<typeof activeClip>(null);
+  activeClipRef.current = activeClip;
   isLiveRef.current = isLive;
   activePollRef.current = activePoll;
   isTranscribingRef.current = isTranscribing;
@@ -301,6 +303,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   // ── Pull up clip: vector search the clip library ────────────────────────────
 
   const handlePullUpClip = useCallback(async (query: string) => {
+    if (activeClipRef.current) return; // already showing a clip, ignore
     console.log(`[ClipOverlay] Searching for: "${query}"`);
     pushComment({ id: `zee-clip-${Date.now()}`, user: "⚡ Zee", text: `🔍 Searching clips for "${query}"…`, avatar: "🤖" });
 
@@ -316,6 +319,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       const fullUrl = rawUrl.startsWith("http") ? rawUrl : `${BACKEND_URL}${rawUrl}`;
       setActiveClip({
         id: best.id,
+        mountKey: `${best.id}-${Date.now()}`,
         title: best.title,
         sourceVideoUrl: fullUrl,
         durationSeconds: best.durationSeconds,
@@ -346,6 +350,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       case "shoutout":     if (pendingAction.user) triggerShoutout(pendingAction.user); break;
       case "countdown":    triggerCountdown(pendingAction.seconds ?? 5); break;
       case "pull_up_clip": if (pendingAction.query) handlePullUpClip(pendingAction.query); break;
+      case "clip":         handleClip(); break;
     }
     onPendingActionConsumed();
   }, [pendingAction]); // eslint-disable-line
@@ -504,6 +509,11 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const videoLoop = useCallback(async () => {
     while (isVideoLoopRef.current) {
       if (!cameraRef.current) { await new Promise(r => setTimeout(r, 500)); continue; }
+      // Skip takePicture while video buffer is recording — iOS camera can't do both
+      if (videoBufferActiveRef.current) {
+        await new Promise(r => setTimeout(r, FRAME_INTERVAL_MS));
+        continue;
+      }
       try {
         const photo = await cameraRef.current.takePictureAsync({ quality: 0.3, base64: true, skipProcessing: true });
         if (photo?.uri && photo?.base64 && isVideoLoopRef.current) {
@@ -832,6 +842,8 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       pushComment({ id: `clip-prompt-${Date.now()}`, user: "✂️ Panda", text: `"${clipPrompt}"`, avatar: "🎬" });
 
       // Restart the buffer before the slow upload so we don't lose coverage
+      stopVideoBuffer();
+      await new Promise((r) => setTimeout(r, 500));
       startVideoBuffer();
 
       // Send the real video file to /api/process
@@ -846,12 +858,14 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     } catch (err: any) {
       console.warn("[Clip] Error:", err);
       pushComment({ id: `clip-err-${Date.now()}`, user: "✂️ Panda", text: "Clip failed — try again", avatar: "🎬" });
+      stopVideoBuffer();
+      await new Promise((r) => setTimeout(r, 500));
       startVideoBuffer();
     } finally {
       isClippingRef.current = false;
       setIsClipping(false);
     }
-  }, [speak, pushComment, startVideoBuffer]); // eslint-disable-line
+  }, [speak, pushComment, startVideoBuffer, stopVideoBuffer]); // eslint-disable-line
 
   useEffect(() => {
     if (isTranscribing && isLive) {
@@ -1002,7 +1016,7 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
         {/* Clip overlay */}
         {activeClip && (
           <ClipOverlay
-            key={activeClip.id}
+            key={activeClip.mountKey}
             clip={activeClip}
             onClose={() => setActiveClip(null)}
           />

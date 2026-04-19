@@ -37,7 +37,7 @@ interface Clip {
 
 type Section = "clips" | "photos";
 
-export default function LibraryScreen() {
+export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
   const [section, setSection] = useState<Section>("clips");
 
   const [clips, setClips] = useState<Clip[]>([]);
@@ -110,6 +110,14 @@ export default function LibraryScreen() {
     if (section === "clips") loadClips();
     else loadPhotos();
   }, [section, loadClips, loadPhotos]);
+
+  // Refresh when navigating to this tab so newly saved clips appear
+  useEffect(() => {
+    if (isFocused) {
+      if (section === "clips") loadClips();
+      else loadPhotos();
+    }
+  }, [isFocused]); // eslint-disable-line
 
   return (
     <View style={styles.root}>
