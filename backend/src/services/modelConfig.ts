@@ -20,8 +20,8 @@ export const GEMINI_MODELS = {
   transcription:     pick("GEMINI_MODEL_TRANSCRIPTION", "gemini-3.1-flash-lite-preview"),
   // Video composition planning (needs more reasoning)
   videoComposition:  pick("GEMINI_MODEL_VIDEO",         "gemini-3.0-flash-preview"),
-  // Product lookup for pullUpProduct
-  productLookup:     pick("GEMINI_MODEL_PRODUCT",       "gemini-3.1-flash-lite-preview"),
+  // Product lookup for pullUpProduct — needs strong search grounding + brand reasoning
+  productLookup:     pick("GEMINI_MODEL_PRODUCT",       "gemini-3.1-pro-preview"),
   // Image generation / editing (Nano Banana family)
   imageEdit:         pick("GEMINI_MODEL_IMAGE",         "gemini-2.5-flash-image-preview"),
   // Bidirectional Live API over WebSocket

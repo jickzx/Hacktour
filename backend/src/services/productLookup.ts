@@ -25,24 +25,26 @@ export async function lookupProduct(query: string): Promise<ProductLookupResult 
   const ai = getClient();
   const response = await ai.models.generateContent({
     model: GEMINI_MODELS.productLookup,
-    contents: `Find the best direct product page for this shopping request: "${query}".
+    contents: `You are a shopping agent. The streamer wants to show viewers a direct product page for: "${query}".
 
-Prefer official brand or major retailer product pages over blog posts, review pages, or generic search results.
-Return ONLY a JSON object with this exact shape:
+Work in two steps using Google Search:
+1. Identify the brand (or most-likely brand) the streamer is referencing.
+2. Find the exact product page on that brand's OWN official website first. Only if the brand has no direct product page, or the item is out of stock / unavailable there, fall back to a major trusted retailer (e.g. Amazon, Nordstrom, JD Sports, Selfridges, ASOS, Best Buy, Target). Never use blog posts, review articles, aggregators, resellers, or generic search result pages.
+
+Return ONLY a JSON object with this exact shape (no markdown, no commentary):
 {
   "title": "short product name",
-  "price": "$160",
-  "store": "Nike",
+  "price": "currency + amount if visible",
+  "store": "the site the url points to (brand name or retailer)",
   "url": "https://...",
   "summary": "short 1 sentence buy summary"
 }
 
 Rules:
-- url must be a direct webpage someone could click to buy or view the exact item.
-- If an exact product page is not available, use the closest credible shopping page.
-- Keep title under 80 chars.
-- Keep summary under 120 chars.
-- If you cannot find a credible result, return {"title":"","url":"","summary":""}.`,
+- url MUST point directly to a product detail page (PDP) on the brand or retailer, not a homepage, category page, or search page.
+- "store" must match what is actually hosting the url (don't say "Nike" if the url is nordstrom.com).
+- Keep title under 80 chars, summary under 120 chars.
+- If no credible product page can be found, return {"title":"","url":"","summary":""}.`,
     config: {
       tools: [{ googleSearch: {} }],
       temperature: 0.2,
