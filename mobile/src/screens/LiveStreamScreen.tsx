@@ -20,13 +20,16 @@ import {
 } from "react-native";
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import { AudioModule, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
+import * as FileSystem from "expo-file-system/legacy";
 import * as Speech from "expo-speech";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII, WEIGHTS } from "../constants/theme";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
+import ProductOverlay from "../components/ProductOverlay";
 import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem, processEdit } from "../services/api";
+import { findProduct, ProductItem } from "../services/product";
 import { BACKEND_URL } from "../services/backendUrl";
 import { ensureHumanLikeVoice, getVoicePresetPatch, getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings, updateVoiceSettings } from "../services/voiceSettings";
 
@@ -35,6 +38,83 @@ import { ensureHumanLikeVoice, getVoicePresetPatch, getVoiceSettings, loadVoiceS
 
 const AUDIO_CHUNK_MS = 3000;
 const FRAME_INTERVAL_MS = 7000;
+const SPEECH_RECORDING_PRESET = {
+  ...RecordingPresets.HIGH_QUALITY,
+  sampleRate: 16000,
+  numberOfChannels: 1,
+  bitRate: 64000,
+  isMeteringEnabled: true,
+  android: {
+    ...RecordingPresets.HIGH_QUALITY.android,
+    audioSource: "voice_recognition" as const,
+    sampleRate: 16000,
+  },
+  ios: {
+    ...RecordingPresets.HIGH_QUALITY.ios,
+    sampleRate: 16000,
+  },
+};
+
+// Chunked PCM streamed directly to Gemini Live on iOS.
+// Kept short so Gemini's VAD can see turn boundaries with low latency,
+// but not so short that the AudioRecorder start/stop overhead eats the loop.
+const PANDA_PCM_CHUNK_MS = 640;
+
+// 16 kHz / 16-bit / mono LPCM (WAV on disk; we strip the header before sending).
+// Android MediaRecorder can't produce raw PCM — audioLoop falls back to the
+// REST-transcribe path on Android.
+const PANDA_PCM_RECORDING_OPTIONS = {
+  extension: ".wav",
+  sampleRate: 16000,
+  numberOfChannels: 1,
+  bitRate: 256000,
+  isMeteringEnabled: false,
+  android: {
+    ...RecordingPresets.HIGH_QUALITY.android,
+    outputFormat: "default" as const,
+    audioEncoder: "default" as const,
+    sampleRate: 16000,
+    extension: ".wav",
+  },
+  ios: {
+    ...RecordingPresets.HIGH_QUALITY.ios,
+    outputFormat: "lpcm" as const, // IOSOutputFormat.LINEARPCM
+    sampleRate: 16000,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+    extension: ".wav",
+  },
+};
+
+/**
+ * Strip the RIFF/WAVE container from a base64 WAV and return the raw PCM
+ * payload (still base64). Scans for the "data" subchunk rather than
+ * assuming a fixed 44-byte header, since expo-audio occasionally emits
+ * an LIST/INFO chunk that changes the offset.
+ */
+function stripWavHeaderBase64(b64: string): string {
+  const binary = globalThis.atob(b64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+
+  let offset = 44; // standard fallback
+  const scanEnd = Math.min(512, len - 4);
+  for (let i = 12; i < scanEnd; i++) {
+    // "data" ASCII
+    if (bytes[i] === 0x64 && bytes[i + 1] === 0x61 && bytes[i + 2] === 0x74 && bytes[i + 3] === 0x61) {
+      offset = i + 8; // skip "data" (4) + chunk size (4)
+      break;
+    }
+  }
+
+  if (offset >= len) return "";
+
+  let s = "";
+  for (let i = offset; i < len; i++) s += String.fromCharCode(bytes[i]);
+  return globalThis.btoa(s);
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -55,7 +135,7 @@ const { height: SCREEN_H } = Dimensions.get("window");
 // Wake word variants — "panda", "hey panda", "ok panda", "yo panda", "panda go"
 const WAKE_WORDS = /(?:^|\s)(hey\s+panda|ok\s+panda|yo\s+panda|panda\s+go|panda)(?:\s|,|!|$)/i;
 const PANDA_STOP_RE = /(?:^|\s)(?:hey\s+)?panda\s+stop(?:\s|,|!|\.|$)/i;
-const APP_CONTROL_RE = /\b(go live|end stream|mute|unmute|flip camera|emoji mode|hype|shoutout|countdown|create poll|close poll|go to|open|take my photo|take pictures|photo shoot|what am i wearing|rate my fit|find my outfit|change your voice|change voice|pull up|show .*clip|play .*clip|find .*clip)\b/i;
+const APP_CONTROL_RE = /\b(go live|end stream|mute|unmute|flip camera|emoji mode|hype|shoutout|countdown|create poll|close poll|go to|open|take my photo|take pictures|photo shoot|what am i wearing|rate my fit|find my outfit|change your voice|change voice|pull up|show .*clip|play .*clip|find .*clip|nike|adidas|puma|jordan|air max|samba|shoe|shoes|sneaker|sneakers|hoodie|shirt|jacket|bag|hat)\b/i;
 
 const PANDA_COMMANDS = [
   { cmd: "hey panda go live", desc: "Start the stream" },
@@ -73,6 +153,7 @@ const PANDA_COMMANDS = [
   { cmd: "hey panda take my photo", desc: "Start a guided photo shoot" },
   { cmd: "hey panda change your voice", desc: "Switch Panda's saved voice" },
   { cmd: "hey panda what am I wearing", desc: "Identify outfit + shop links" },
+  { cmd: "hey panda pull up red nike air maxes", desc: "Show a product page on stream" },
 ];
 
 // Hard cap on pictures per "take photos of me" request
@@ -147,7 +228,10 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     id: string; mountKey: string; title: string; sourceVideoUrl: string; durationSeconds: number; score: number;
   } | null>(null);
   const activeClipRef = useRef<typeof activeClip>(null);
+  const [activeProduct, setActiveProduct] = useState<(ProductItem & { mountKey: string }) | null>(null);
+  const activeProductRef = useRef<typeof activeProduct>(null);
   activeClipRef.current = activeClip;
+  activeProductRef.current = activeProduct;
   const [pandaLiveOn, setPandaLiveOn] = useState(false);
   const pandaLiveWsRef = useRef<WebSocket | null>(null);
   const pandaLiveReadyRef = useRef(false);
@@ -264,12 +348,18 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
   const stopPandaLive = useCallback((announce = true) => {
     debugPanda(`stop requested announce=${announce}`);
     pandaLiveActiveRef.current = false;
-    pandaLiveConnectingRef.current = false;
     setPandaLiveOn(false);
-    pandaLiveReadyRef.current = false;
-    pandaLiveQueueRef.current = [];
-    pandaLiveWsRef.current?.close();
-    pandaLiveWsRef.current = null;
+    // On iOS the Live session is the transcription source too — keep the WS
+    // alive so chat transcription / polls / photo cues keep working.
+    // On Android the WS only exists while Panda is actively chatting, so tear
+    // it down to save the token.
+    if (Platform.OS !== "ios") {
+      pandaLiveConnectingRef.current = false;
+      pandaLiveReadyRef.current = false;
+      pandaLiveQueueRef.current = [];
+      pandaLiveWsRef.current?.close();
+      pandaLiveWsRef.current = null;
+    }
     if (announce) {
       Speech.stop();
       speak("Panda out.");
@@ -277,32 +367,81 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
     }
   }, [debugPanda, pushComment, speak]);
 
+  // Send one complete text turn. Uses clientContent (not realtimeInput) so
+  // the Live API knows the turn is finished and emits a model response.
+  // realtimeInput.text is for token streaming mid-audio-turn; using it alone
+  // leaves the model waiting forever for a turn end, which is why Panda
+  // "stalled" after the greeting.
+  const sendTextTurnOverWs = useCallback((ws: WebSocket, text: string) => {
+    ws.send(JSON.stringify({
+      clientContent: {
+        turns: [{ role: "user", parts: [{ text }] }],
+        turnComplete: true,
+      },
+    }));
+  }, []);
+
+  // Read a WAV file the recorder wrote, strip its header, and ship the PCM
+  // to Gemini Live as a realtimeInput.audio blob. Gemini's built-in VAD
+  // (configured in setup) handles turn segmentation; we just keep feeding
+  // it audio for as long as Panda is active.
+  const streamPcmChunkToPanda = useCallback(async (uri: string) => {
+    const ws = pandaLiveWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !pandaLiveReadyRef.current) return;
+    try {
+      const b64wav = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+      if (!b64wav) return;
+      const b64pcm = stripWavHeaderBase64(b64wav);
+      if (!b64pcm) return;
+      ws.send(JSON.stringify({
+        realtimeInput: {
+          audio: { data: b64pcm, mimeType: "audio/pcm;rate=16000" },
+        },
+      }));
+    } catch (err) {
+      debugPanda(`pcm stream error ${err instanceof Error ? err.message : "?"}`);
+    } finally {
+      // The WAV chunks pile up in cache — delete eagerly to stop running out of room
+      FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+    }
+  }, [debugPanda]);
+
+  // Setup for Gemini Live. We feed 16 kHz LPCM audio continuously (iOS only)
+  // so Gemini's server-side VAD segments the turns. Android still uses the
+  // clientContent text-turn fallback, which also works against this setup.
+  // Model name is env-overridable — if your account has access to a newer
+  // preview, set EXPO_PUBLIC_GEMINI_LIVE_MODEL in mobile/.env to swap it in.
   const createPandaSetup = useCallback(() => JSON.stringify({
     setup: {
-      model: "models/gemini-3.1-flash-live-preview",
+      model: `models/${process.env.EXPO_PUBLIC_GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live"}`,
       generationConfig: {
         responseModalities: ["TEXT"],
+        temperature: 0.8,
       },
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,
-          silenceDurationMs: 1200,
+          silenceDurationMs: 800,
           prefixPaddingMs: 300,
           endOfSpeechSensitivity: "END_SENSITIVITY_UNSPECIFIED",
           startOfSpeechSensitivity: "START_SENSITIVITY_UNSPECIFIED",
         },
-        activityHandling: "ACTIVITY_HANDLING_UNSPECIFIED",
+        activityHandling: "START_OF_ACTIVITY_INTERRUPTS",
         turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
       },
+      // Gemini's own transcript of the user's speech, so we can show it
+      // in chat without running a second REST transcription.
       inputAudioTranscription: {},
-      outputAudioTranscription: {},
       systemInstruction: {
         parts: [{ text: `You are Panda, a live voice assistant inside a streaming app.
-You can talk naturally to the streamer about anything and help with tasks.
-Keep replies short, warm, and direct.
-If the user is just speaking generally, reply conversationally.
-If the user asks for a task, help clearly in plain language.
-Do not use JSON.` }],
+
+You continuously hear the streamer's audio. They are a live streamer talking to their audience, NOT always talking to you. You must NOT respond to every turn.
+
+Strict rules:
+1. If the streamer clearly addressed you by name ("Panda", "hey panda", "ok panda", "yo panda"), respond conversationally in 1-2 sentences — warm, short, direct, no JSON.
+2. If the streamer did NOT address you by name in the current turn, reply with the exact single word: SILENT
+3. Never explain why you are silent. Never apologise. If in doubt, output SILENT.
+4. Do not use JSON.` }],
       },
     },
   }), []);
@@ -336,8 +475,11 @@ Do not use JSON.` }],
           const msg = JSON.parse(String(event.data)) as {
             setupComplete?: boolean;
             serverContent?: {
+              inputTranscription?: { text?: string; finished?: boolean };
               outputTranscription?: { text?: string };
               modelTurn?: { parts?: Array<{ text?: string }> };
+              turnComplete?: boolean;
+              interrupted?: boolean;
             };
           };
           debugPanda(`message keys=${Object.keys(msg).join(",")}`);
@@ -347,8 +489,17 @@ Do not use JSON.` }],
             debugPanda(`ready queued=${pandaLiveQueueRef.current.length}`);
             const queue = [...pandaLiveQueueRef.current];
             pandaLiveQueueRef.current = [];
-            queue.forEach((queued) => ws.send(JSON.stringify({ realtimeInput: { text: queued } })));
+            queue.forEach((queued) => sendTextTurnOverWs(ws, queued));
             return;
+          }
+
+          // Gemini-side transcript of the streamer's speech. Route it through
+          // the same dispatcher the REST path uses so wake word detection,
+          // poll detection, photo-session cues, and chat display all reuse
+          // one pipeline.
+          const userTranscript = msg.serverContent?.inputTranscription;
+          if (userTranscript?.finished && userTranscript.text?.trim()) {
+            handleStreamerTranscript(userTranscript.text);
           }
 
           const liveText = msg.serverContent?.modelTurn?.parts
@@ -358,6 +509,13 @@ Do not use JSON.` }],
           const outputTranscript = msg.serverContent?.outputTranscription?.text?.trim();
           const responseText = liveText || outputTranscript;
           if (responseText) {
+            // System instruction tells Panda to say exactly "SILENT" for any
+            // turn that wasn't directed at her. Drop those before speaking.
+            const normalised = responseText.replace(/[^a-zA-Z]/g, "").toUpperCase();
+            if (normalised === "SILENT" || normalised === "") {
+              debugPanda("response silent-drop");
+              return;
+            }
             debugPanda(`response ${responseText.slice(0, 60)}`);
             speak(responseText);
             pushComment({
@@ -373,11 +531,13 @@ Do not use JSON.` }],
         }
       };
       ws.onerror = (err) => {
-        debugPanda("socket error");
+        const reason = (err as { message?: string })?.message || "unknown";
+        debugPanda(`socket error ${reason}`);
         console.warn("[Panda Live] Error:", err);
       };
-      ws.onclose = () => {
-        debugPanda("socket closed");
+      ws.onclose = (evt) => {
+        const e = evt as { code?: number; reason?: string };
+        debugPanda(`socket closed code=${e?.code ?? "?"} reason=${(e?.reason ?? "").slice(0, 80)}`);
         pandaLiveWsRef.current = null;
         pandaLiveConnectingRef.current = false;
         pandaLiveReadyRef.current = false;
@@ -406,9 +566,9 @@ Do not use JSON.` }],
       if (!ws || !pandaLiveReadyRef.current || ws.readyState !== WebSocket.OPEN) return;
       const queue = [...pandaLiveQueueRef.current];
       pandaLiveQueueRef.current = [];
-      queue.forEach((queued) => ws.send(JSON.stringify({ realtimeInput: { text: queued } })));
+      queue.forEach((queued) => sendTextTurnOverWs(ws, queued));
     });
-  }, [debugPanda, ensurePandaLive]);
+  }, [debugPanda, ensurePandaLive, sendTextTurnOverWs]);
 
   const togglePandaLive = useCallback(() => {
     if (pandaLiveActiveRef.current) {
@@ -554,6 +714,27 @@ Do not use JSON.` }],
     });
   }, [pushComment]);
 
+  const handlePullUpProduct = useCallback(async (query: string) => {
+    if (activeProductRef.current) return;
+    console.log(`[ProductOverlay] Searching for: "${query}"`);
+
+    try {
+      const item = await findProduct(query);
+      setActiveProduct({ ...item, mountKey: `${Date.now()}-${item.displayUrl}` });
+      pushComment({
+        id: `panda-product-${Date.now()}`,
+        user: "🐼 Panda",
+        text: `${item.title}${item.store ? ` from ${item.store}` : ""}${item.price ? ` · ${item.price}` : ""}`,
+        avatar: "🛍️",
+        link: item.url,
+      });
+      speak(`Pulled it up. I dropped the buy link in chat.`);
+    } catch (err) {
+      console.warn("[ProductOverlay] Search error:", err);
+      pushComment({ id: `panda-product-err-${Date.now()}`, user: "🐼 Panda", text: "I couldn't find a solid buy link for that one.", avatar: "🛍️" });
+    }
+  }, [pushComment, speak]);
+
   // ── Assistant: handle pendingAction from App.tsx ─────────────────────────────
 
   useEffect(() => {
@@ -573,6 +754,7 @@ Do not use JSON.` }],
       case "shoutout":     if (pendingAction.user) triggerShoutout(pendingAction.user); break;
       case "countdown":    triggerCountdown(pendingAction.seconds ?? 5); break;
       case "pull_up_clip": if (pendingAction.query) handlePullUpClip(pendingAction.query); break;
+      case "pull_up_product": if (pendingAction.query) handlePullUpProduct(pendingAction.query); break;
       case "clip":         handleClip(); break;
       case "take_photos":  if (pendingAction.poses?.length) startPhotoSession(pendingAction.poses); break;
       case "identify_outfit": scanOutfit(); break;
@@ -601,17 +783,27 @@ Do not use JSON.` }],
     console.log(`[Panda] Wake word detected, command: "${rawCommand}"`);
     setAssistantActive(true);
 
+    // On iOS the Live session is already open and streaming audio, so Gemini
+    // will produce its own reply to the wake-word turn. Speaking a canned
+    // greeting locally would just talk over the real response. Keep the
+    // greeting on Android where we still need the user feedback.
+    const iosLive = Platform.OS === "ios" && pandaLiveReadyRef.current;
+
     if (isFreshWake) {
-      if (canSpeakGreeting) {
+      pandaLiveActiveRef.current = true;
+      setPandaLiveOn(true);
+      if (!iosLive && canSpeakGreeting) {
         lastPandaGreetingAtRef.current = Date.now();
         speak(greeting);
       }
-      pushComment({
-        id: `panda-greet-${Date.now()}`,
-        user: "🐼 Panda",
-        text: greeting,
-        avatar: "🤖",
-      });
+      if (!iosLive) {
+        pushComment({
+          id: `panda-greet-${Date.now()}`,
+          user: "🐼 Panda",
+          text: greeting,
+          avatar: "🤖",
+        });
+      }
 
       if (!hasExplicitCommand) {
         ensurePandaLive();
@@ -620,7 +812,10 @@ Do not use JSON.` }],
       }
     }
 
-    if (hasExplicitCommand) {
+    // Android path still needs a text-turn echo (audio never reaches Gemini).
+    // iOS has already fed the audio, so resending as text would duplicate the
+    // user input and confuse the model.
+    if (hasExplicitCommand && !iosLive) {
       sendToPandaLive(rawCommand);
     }
 
@@ -689,83 +884,123 @@ Do not use JSON.` }],
 
   // ── Fast audio-only transcription loop ───────────────────────────────────────
 
+  // Post-transcription dispatcher. The same logic runs whether the transcript
+  // came from the REST /api/transcribe (Android / pre-live) or from Gemini's
+  // continuous inputAudioTranscription stream (iOS always-on path).
+  const handleStreamerTranscript = useCallback((raw: string) => {
+    const transcript = raw.trim();
+    if (!transcript) return;
+
+    if (isPandaEcho(transcript)) {
+      console.log(`[Panda] Ignoring self-echo: ${transcript}`);
+      return;
+    }
+
+    console.log(`[Streamer] ${transcript}`);
+    pushComment({ id: `transcript-${Date.now()}`, user: "🎙 you (live)", text: transcript, avatar: "🎤", isTranscript: true });
+    transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
+
+    if (PANDA_STOP_RE.test(transcript) && pandaLiveActiveRef.current) {
+      stopPandaLive();
+      return;
+    }
+
+    // While Panda is already active, ignore repeated wake words entirely.
+    if (pandaLiveActiveRef.current && WAKE_WORDS.test(transcript)) {
+      console.log(`[Panda] Ignoring repeated wake word: ${transcript}`);
+      return;
+    }
+
+    // During a photo session, listen for "ready" / "stop" and swallow everything else
+    if (photoSessionRef.current && readyResolverRef.current) {
+      if (STOP_RE.test(transcript)) {
+        const r = readyResolverRef.current; readyResolverRef.current = null; r("stop");
+        return;
+      }
+      if (READY_RE.test(transcript)) {
+        const r = readyResolverRef.current; readyResolverRef.current = null; r("ready");
+        return;
+      }
+      // Don't trigger assistant / polls while we're shooting — just absorb
+      return;
+    }
+
+    if (WAKE_WORDS.test(transcript)) { triggerAssistant(transcript); return; }
+
+    // Only the REST / Android path needs to hand the text back to the Panda WS.
+    // On iOS we're already streaming audio into the same session, so Gemini
+    // will produce its conversational response straight from the audio.
+    if (pandaLiveActiveRef.current && Platform.OS !== "ios") {
+      sendToPandaLive(transcript);
+    }
+
+    detectPoll(transcript);
+  }, [detectPoll, isPandaEcho, pushComment, sendToPandaLive, stopPandaLive, triggerAssistant]);
+
   const processAudioChunk = useCallback(async (uri: string) => {
     try {
+      const audioType = getAudioMimeType(uri);
+      const filename = `chunk${getAudioExtension(uri)}`;
       const form = new FormData();
-      form.append("audio", { uri, name: "chunk.m4a", type: "audio/m4a" } as any);
+      form.append("audio", { uri, name: filename, type: audioType } as any);
       const res = await fetch(`${BACKEND_URL}/api/transcribe`, { method: "POST", body: form });
       const data = await res.json();
-      const transcript: string = data.transcript ?? "";
-      if (!transcript) return;
-
-      if (isPandaEcho(transcript)) {
-        console.log(`[Panda] Ignoring self-echo: ${transcript}`);
-        return;
-      }
-
-      console.log(`[Streamer] ${transcript}`);
-      pushComment({ id: `transcript-${Date.now()}`, user: "🎙 you (live)", text: transcript, avatar: "🎤", isTranscript: true });
-      transcriptContextRef.current = [...transcriptContextRef.current.slice(-4), transcript];
-
-      if (PANDA_STOP_RE.test(transcript) && pandaLiveActiveRef.current) {
-        stopPandaLive();
-        return;
-      }
-
-      // While Panda is already active, ignore repeated wake words entirely.
-      if (pandaLiveActiveRef.current && WAKE_WORDS.test(transcript)) {
-        console.log(`[Panda] Ignoring repeated wake word: ${transcript}`);
-        return;
-      }
-
-      // During a photo session, listen for "ready" / "stop" and swallow everything else
-      if (photoSessionRef.current && readyResolverRef.current) {
-        if (STOP_RE.test(transcript)) {
-          const r = readyResolverRef.current; readyResolverRef.current = null; r("stop");
-          return;
-        }
-        if (READY_RE.test(transcript)) {
-          const r = readyResolverRef.current; readyResolverRef.current = null; r("ready");
-          return;
-        }
-        // Don't trigger assistant / polls while we're shooting — just absorb
-        return;
-      }
-
-      if (WAKE_WORDS.test(transcript)) { triggerAssistant(transcript); return; }
-
-      if (pandaLiveActiveRef.current) {
-        sendToPandaLive(transcript);
-      }
-
-      detectPoll(transcript);
+      handleStreamerTranscript(data.transcript ?? "");
     } catch (err) {
       console.warn("[Audio] Error:", err);
     }
-  }, [detectPoll, isPandaEcho, pushComment, sendToPandaLive, stopPandaLive, triggerAssistant]);
+  }, [handleStreamerTranscript]);
 
   const audioLoop = useCallback(async () => {
     const perm = await requestRecordingPermissionsAsync();
     if (!perm.granted) { console.warn("[Audio loop] Permission denied"); return; }
-    await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+    await setAudioModeAsync({
+      playsInSilentMode: true,
+      allowsRecording: true,
+      shouldRouteThroughEarpiece: false,
+      interruptionMode: "doNotMix",
+    });
     while (isAudioLoopRef.current) {
+      // iOS: always stream 16 kHz LPCM directly to Gemini Live (the session
+      // opens automatically when transcription starts). Gemini's own VAD
+      // handles turn segmentation, so a single pipeline covers chat
+      // transcription, wake-word detection, poll detection, AND Panda's
+      // conversational responses — no REST round-trip.
+      // Android: MediaRecorder can't emit clean raw PCM, so it stays on the
+      // slower REST /api/transcribe path.
+      const pandaPcmStreaming =
+        Platform.OS === "ios" &&
+        pandaLiveWsRef.current?.readyState === WebSocket.OPEN &&
+        pandaLiveReadyRef.current;
       try {
-        const rec = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+        const preset = pandaPcmStreaming ? PANDA_PCM_RECORDING_OPTIONS : SPEECH_RECORDING_PRESET;
+        const chunkMs = pandaPcmStreaming ? PANDA_PCM_CHUNK_MS : AUDIO_CHUNK_MS;
+        const rec = new AudioModule.AudioRecorder(preset);
         audioRecordingRef.current = rec;
         await rec.prepareToRecordAsync();
+        if (!pandaPcmStreaming) {
+          // Only the slow loop benefits from explicit mic selection; PCM chunks are short
+          // enough that hunting through available inputs each iteration wastes time.
+          const inputs = rec.getAvailableInputs();
+          const phoneMic = inputs.find((input) => /built.?in|microphone|bottom/i.test(`${input.name} ${input.type}`));
+          if (phoneMic) rec.setInput(phoneMic.uid);
+        }
         rec.record();
-        await new Promise(r => setTimeout(r, AUDIO_CHUNK_MS));
+        await new Promise(r => setTimeout(r, chunkMs));
         await rec.stop();
         audioRecordingRef.current = null;
         const uri = rec.uri;
-        if (uri && isAudioLoopRef.current) processAudioChunk(uri);
+        if (uri && isAudioLoopRef.current) {
+          if (pandaPcmStreaming) streamPcmChunkToPanda(uri);
+          else processAudioChunk(uri);
+        }
       } catch (err) {
         console.warn("[Audio loop] Error:", err);
         audioRecordingRef.current = null;
         await new Promise(r => setTimeout(r, 500));
       }
     }
-  }, [processAudioChunk]);
+  }, [processAudioChunk, streamPcmChunkToPanda]);
 
   // ── Slow video loop for AI comments ──────────────────────────────────────────
 
@@ -787,11 +1022,6 @@ Do not use JSON.` }],
   const videoLoop = useCallback(async () => {
     while (isVideoLoopRef.current) {
       if (!cameraRef.current) { await new Promise(r => setTimeout(r, 500)); continue; }
-      // Skip takePicture while video buffer is recording — iOS camera can't do both
-      if (videoBufferActiveRef.current) {
-        await new Promise(r => setTimeout(r, FRAME_INTERVAL_MS));
-        continue;
-      }
       try {
         const photo = await cameraRef.current.takePictureAsync({ quality: 0.3, base64: true, skipProcessing: true });
         if (photo?.uri && photo?.base64 && isVideoLoopRef.current) {
@@ -1153,6 +1383,11 @@ Do not use JSON.` }],
       isVideoLoopRef.current = true;
       audioLoop();
       videoLoop();
+      // iOS can feed audio directly to Gemini Live — open the session eagerly
+      // so the audioLoop has somewhere to send its PCM chunks from turn 1.
+      if (Platform.OS === "ios") {
+        ensurePandaLive();
+      }
     }
   }, [isTranscribing]); // eslint-disable-line
 
@@ -1213,6 +1448,23 @@ Do not use JSON.` }],
 
   const fmt = (s: number) =>
     `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+  /** Map the recorder output path to a best-effort MIME type. */
+  function getAudioMimeType(uri: string) {
+    const ext = getAudioExtension(uri);
+    if (ext === ".caf") return "audio/x-caf";
+    if (ext === ".wav") return "audio/wav";
+    if (ext === ".webm") return "audio/webm";
+    if (ext === ".mp3") return "audio/mpeg";
+    return "audio/mp4";
+  }
+
+  /** Pull the file extension from a local recording URI. */
+  function getAudioExtension(uri: string) {
+    const cleanUri = uri.split("?")[0] ?? uri;
+    const match = cleanUri.match(/(\.[a-z0-9]+)$/i);
+    return match?.[1]?.toLowerCase() ?? ".m4a";
+  }
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -1299,6 +1551,14 @@ Do not use JSON.` }],
             key={activeClip.mountKey}
             clip={activeClip}
             onClose={() => setActiveClip(null)}
+          />
+        )}
+
+        {activeProduct && (
+          <ProductOverlay
+            key={activeProduct.mountKey}
+            item={activeProduct}
+            onClose={() => setActiveProduct(null)}
           />
         )}
 

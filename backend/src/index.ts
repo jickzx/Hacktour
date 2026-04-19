@@ -18,6 +18,7 @@ import youtubeRouter from "./routes/youtube";
 import feedRouter from "./routes/feed";
 import photosRouter from "./routes/photos";
 import { GEMINI_MODELS, getGeminiModel } from "./services/modelConfig";
+import { lookupProduct } from "./services/productLookup";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -73,15 +74,43 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
   }
 
   const filePath = req.file.path;
+  const inputMimeType = getUploadAudioMimeType(req.file);
   console.log(`[Transcribe] ${(req.file.size / 1024).toFixed(1)}KB`);
 
   try {
     const base64 = fs.readFileSync(filePath).toString("base64");
     const result = await getGeminiModel("transcription").generateContent([
-      { inlineData: { mimeType: "audio/m4a", data: base64 } },
-      "Transcribe exactly what is spoken in this audio clip. Return only the spoken words verbatim, nothing else. If nothing is spoken return empty string.",
+      { inlineData: { mimeType: inputMimeType, data: base64 } },
+      `Transcribe only clearly audible human speech from this audio clip.
+
+Rules:
+- Return valid JSON only, no markdown.
+- If the clip is silence, noise, music, rustling, crowd sound, or unclear mumbling, return {"transcript":"","shouldPublish":false}.
+- If speech is partial or too uncertain to quote confidently, return {"transcript":"","shouldPublish":false}.
+- Do not guess, summarize, paraphrase, clean up, or invent words.
+- Do not include speaker labels.
+- Only set shouldPublish=true when the spoken words are clear enough to quote in a live chat transcript.
+
+Format:
+{"transcript":"exact words here","shouldPublish":true}`,
     ]);
-    const transcript = result.response.text().trim();
+    const raw = result.response.text().trim();
+    const objMatch = raw.match(/\{[\s\S]*\}/);
+    let parsed: { transcript?: string; shouldPublish?: boolean } = {};
+    try {
+      parsed = JSON.parse(objMatch?.[0] ?? "{}");
+    } catch {
+      console.warn("[Transcribe] JSON parse failed:", raw.slice(0, 200));
+    }
+
+    // Fall back to plain text if Gemini ignored the JSON shape but still returned a clean transcript.
+    const plainTextFallback = !objMatch && !/[\[\]{}]/.test(raw)
+      ? raw.replace(/^"|"$/g, "").trim()
+      : "";
+    const shouldPublish = parsed.shouldPublish ?? Boolean(plainTextFallback);
+    const transcript = shouldPublish
+      ? String(parsed.transcript ?? plainTextFallback ?? "").trim()
+      : "";
     console.log(`[Transcribe] "${transcript}"`);
     res.json({ transcript });
   } catch (err) {
@@ -93,6 +122,19 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
     } catch {}
   }
 });
+
+/** Map uploaded audio metadata to a Gemini-friendly MIME type. */
+function getUploadAudioMimeType(file: Express.Multer.File): string {
+  const hintedType = file.mimetype?.trim().toLowerCase();
+  if (hintedType && hintedType !== "application/octet-stream") return hintedType;
+
+  const lowerName = file.originalname?.toLowerCase() ?? "";
+  if (lowerName.endsWith(".caf")) return "audio/x-caf";
+  if (lowerName.endsWith(".wav")) return "audio/wav";
+  if (lowerName.endsWith(".webm")) return "audio/webm";
+  if (lowerName.endsWith(".mp3")) return "audio/mpeg";
+  return "audio/mp4";
+}
 
 /**
  * POST /api/analyse
@@ -309,6 +351,34 @@ If no person or clothing is visible, return [].`,
 });
 
 /**
+ * POST /api/product-link
+ * Body: { query: string }
+ * Returns: { success: boolean, item?: { title, price?, store?, url, displayUrl, summary } }
+ * Uses Gemini 3.0 Flash + Google Search grounding to find a buy link.
+ */
+app.post("/api/product-link", express.json(), async (req, res) => {
+  const { query } = req.body as { query?: string };
+  if (!query?.trim()) {
+    res.status(400).json({ success: false, error: "Missing query" });
+    return;
+  }
+
+  try {
+    const item = await lookupProduct(query);
+    if (!item) {
+      res.status(404).json({ success: false, error: "No product found" });
+      return;
+    }
+
+    console.log(`[ProductLookup] ${query} -> ${item.url}`);
+    res.json({ success: true, item });
+  } catch (err) {
+    console.error("[ProductLookup] Error:", err);
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+/**
  * POST /api/assistant
  * Body: { command: string, context: string[] }
  * Returns: { response: string, action?: { type: string, [key: string]: any } }
@@ -369,6 +439,7 @@ Action types:
 - shoutout → include "user":"<username>" to shout out a viewer (e.g. "panda shoutout xX_fan99")
 - countdown → include "seconds":<number> (default 5) to start a countdown in chat
 - pull_up_clip → include "query":"<search description>" — streamer wants to show a clip from their library on stream. Extract the descriptive part as the search query. Examples: "pull up the clip where I was cooking" → query:"cooking", "show that dancing clip" → query:"dancing", "play the intro video" → query:"intro video"
+- pull_up_product → include "query":"<product search>" — streamer wants Panda to find a shopping page for a product and show it on stream. Examples: "pull up red nike air maxes" → query:"red nike air maxes", "panda show me black adidas sambas" → query:"black adidas sambas"
 - clip — save a clip of the current live moment to the library
 - take_photos → include "poses":["pose 1","pose 2",...] with 3-5 short pose prompts
 - identify_outfit → no extra fields
@@ -383,6 +454,7 @@ If the streamer asks to change Panda's voice, accent, speed, pitch, or vibe, use
 Use preset="chill" for softer/slower voice requests, preset="hype" for energetic/faster voice requests, preset="deep" for lower pitch requests, preset="chipmunk" for very high pitch requests, and language for accent/language requests.
 If you detect the streamer is asking chat to choose between things, use create_poll automatically.
 If the streamer says "pull up", "show", "play", or "find" followed by a clip description, use pull_up_clip with the descriptive part as the query.
+If the streamer says "pull up", "show", "find", or "open" followed by a product, clothing item, shoe, brand item, or shopping request, use pull_up_product with the product phrase as the query.
 If the streamer says "clip this", "clip that", "save this", "clip it", "record that", "save a clip", use clip.
 If no action needed use {"type":"none"}.`;
 
