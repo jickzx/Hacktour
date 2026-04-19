@@ -50,6 +50,13 @@ export async function listClips() {
   return data.clips;
 }
 
+/** Deletes a clip by id */
+export async function deleteClip(id: string) {
+  const res = await fetch(`${API_BASE}/api/clips/${id}`, { method: "DELETE" });
+  const data = await safeJson(res);
+  if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
+}
+
 /** Searches clips by semantic similarity to a text query */
 export async function searchClips(query: string, limit = 10) {
   const res = await fetch(`${API_BASE}/api/clips/search`, {

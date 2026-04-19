@@ -3,6 +3,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
+  Alert,
   StyleSheet,
   Text,
   View,
@@ -20,7 +21,7 @@ import { useVideoPlayer, VideoView } from "expo-video";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS, SHADOWS } from "../constants/theme";
 import ClipCard from "../components/ClipCard";
-import { listClips, searchClips, listPhotos, photoUrl, Photo } from "../services/api";
+import { listClips, searchClips, deleteClip, listPhotos, photoUrl, Photo } from "../services/api";
 import { useLanguage } from "../context/LanguageContext";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
@@ -100,6 +101,22 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => handleSearch(text), 300);
   };
+
+  const handleDeleteClip = useCallback((clip: Clip) => {
+    Alert.alert("Delete clip?", `"${clip.title}" will be removed from your library.`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete", style: "destructive", onPress: async () => {
+          try {
+            await deleteClip(clip.id);
+            setClips((prev) => prev.filter((c) => c.id !== clip.id));
+          } catch (err: any) {
+            Alert.alert("Error", err.message || "Failed to delete clip");
+          }
+        },
+      },
+    ]);
+  }, []);
 
   const refreshCurrent = useCallback(() => {
     setRefreshing(true);
@@ -214,6 +231,7 @@ export default function LibraryScreen({ isFocused }: { isFocused?: boolean }) {
                 sourceVideoUrl={item.sourceVideoUrl}
                 thumbnailUrl={item.thumbnailUrl}
                 onPress={() => setSelectedClip(item)}
+                onLongPress={() => handleDeleteClip(item)}
               />
             </View>
           )}

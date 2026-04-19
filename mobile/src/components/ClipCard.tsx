@@ -15,6 +15,7 @@ export interface ClipCardProps {
   sourceVideoUrl?: string;
   thumbnailUrl?: string;
   onPress?: () => void;
+  onLongPress?: () => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -39,13 +40,14 @@ export default function ClipCard({
   sourceVideoUrl,
   thumbnailUrl,
   onPress,
+  onLongPress,
 }: ClipCardProps) {
   const thumbUri = thumbnailUrl
     ? (thumbnailUrl.startsWith("http") ? thumbnailUrl : `${API_BASE}${thumbnailUrl}`)
     : null;
 
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.85}>
+    <TouchableOpacity style={styles.card} onPress={onPress} onLongPress={onLongPress} activeOpacity={0.85}>
       <View style={styles.thumb}>
         {thumbUri ? (
           <Image source={{ uri: thumbUri }} style={styles.thumbImg} resizeMode="cover" />
