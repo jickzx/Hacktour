@@ -179,7 +179,12 @@ const { height: SCREEN_H } = Dimensions.get("window");
 const PANDA_ALIASES = "p[ao]nd[ao]|p[ao]nt[ao]|b[ao]nd[ao]";
 const WAKE_WORDS = new RegExp(`\\b(?:${PANDA_ALIASES})\\b`, "i");
 const PANDA_STOP_RE = new RegExp(`\\b(?:${PANDA_ALIASES})\\s+stop\\b`, "i");
-const APP_CONTROL_RE = /\b(go live|end stream|mute|unmute|flip camera|emoji mode|hype|shoutout|countdown|create poll|close poll|go to|open|take my photo|take pictures|photo shoot|what am i wearing|rate my fit|find my outfit|change your voice|change voice|pull up|show .*clip|play .*clip|find .*clip|nike|adidas|puma|jordan|air max|samba|shoe|shoes|sneaker|sneakers|hoodie|shirt|jacket|bag|hat)\b/i;
+// Legacy keyword pre-filter — replaced by a Gemini 3.1 flash-lite classifier
+// in /api/assistant. Any phrase that follows the wake word is now routed to
+// the model for intent classification, so we don't need a hand-maintained
+// regex that has to be updated every time we add a command. Left here as a
+// reference until the new classifier has been in production for a while.
+// const APP_CONTROL_RE = /\b(go live|end stream|mute|unmute|flip camera|emoji mode|hype|shoutout|countdown|create poll|close poll|go to|open|take my photo|take pictures|photo shoot|what am i wearing|rate my fit|find my outfit|change your voice|change voice|pull up|show .*clip|play .*clip|find .*clip|nike|adidas|puma|jordan|air max|samba|shoe|shoes|sneaker|sneakers|hoodie|shirt|jacket|bag|hat)\b/i;
 
 const PANDA_COMMANDS = [
   { cmd: "hey panda go live", desc: "Start the stream" },
@@ -848,7 +853,12 @@ Rules:
     const greeting = "Panda here, what's up?";
     const isFreshWake = !pandaLiveActiveRef.current;
     const hasExplicitCommand = afterWake.length > 0;
-    const shouldRunActionAssistant = hasExplicitCommand && APP_CONTROL_RE.test(afterWake);
+    // Previously we gated /api/assistant on a local keyword regex so casual
+    // chat wouldn't trigger an action call. The backend now runs a Gemini
+    // 3.1 flash-lite classifier that returns type="none" for anything that
+    // isn't an app command, so we can safely route every wake-word turn.
+    // const shouldRunActionAssistant = hasExplicitCommand && APP_CONTROL_RE.test(afterWake);
+    const shouldRunActionAssistant = hasExplicitCommand;
     const canSpeakGreeting = Date.now() - lastPandaGreetingAtRef.current > 10_000;
 
     console.log(`[Panda] Wake word detected, command: "${rawCommand}"`);
