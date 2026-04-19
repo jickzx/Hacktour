@@ -65,6 +65,15 @@ export const clipStore = {
     return clips.find((c) => c.id === id);
   },
 
+  /** Deletes a clip by id. Returns true if found and removed. */
+  deleteClip(id: string): boolean {
+    const idx = clips.findIndex((c) => c.id === id);
+    if (idx === -1) return false;
+    clips.splice(idx, 1);
+    saveToDisk();
+    return true;
+  },
+
   /** Returns top N clips ranked by cosine similarity to the query embedding */
   searchByEmbedding(
     queryEmbedding: number[],
