@@ -36,7 +36,19 @@ import { ensureHumanLikeVoice, getVoicePresetPatch, getVoiceSettings, loadVoiceS
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 
-const AUDIO_CHUNK_MS = 3000;
+// VAD-driven chunking for the REST /api/transcribe path. Instead of slicing
+// on a fixed 3s timer (which cut sentences in half mid-word), we record until
+// the speaker has been quiet for SILENCE_TAIL_MS — so chunks only flush at a
+// natural pause. MAX keeps one long rant from stalling transcription forever.
+const AUDIO_VAD_MIN_SPEECH_MS = 1500;
+const AUDIO_VAD_SILENCE_TAIL_MS = 1800;
+const AUDIO_VAD_MAX_CHUNK_MS = 22000;
+const AUDIO_VAD_POLL_MS = 120;
+// dB threshold (expo-audio metering is typically -160..0). Anything ABOVE
+// this is treated as active speech. Lowering it makes the VAD more lenient:
+// quiet breaths and inter-word gaps get counted as still-talking, so we
+// don't cut off mid-sentence. Raise if noisy rooms keep the recorder open.
+const AUDIO_VAD_SILENCE_DB = -48;
 const FRAME_INTERVAL_MS = 7000;
 const SPEECH_RECORDING_PRESET = {
   ...RecordingPresets.HIGH_QUALITY,
@@ -87,6 +99,33 @@ const PANDA_PCM_RECORDING_OPTIONS = {
   },
 };
 
+// Int16 PCM RMS below this is treated as silence and never shipped to Gemini.
+// The Live API otherwise fills silence with fabricated transcripts ("you",
+// "thank you", "okay"), polluting the chat overlay and engaging Panda by
+// accident. ~400 corresponds to quiet room noise; raise if speech is being
+// skipped or lower if too much silence leaks through.
+const PANDA_SILENCE_RMS_THRESHOLD = 450;
+
+/**
+ * Compute RMS of a base64-encoded little-endian int16 PCM buffer without
+ * allocating a typed array. Keeps per-chunk cost to ~a few ms even at 16 kHz.
+ */
+function pcmRmsFromBase64(b64: string): number {
+  const binary = globalThis.atob(b64);
+  const bytes = binary.length;
+  if (bytes < 2) return 0;
+  const samples = bytes >> 1;
+  let sumSq = 0;
+  for (let i = 0; i < samples; i++) {
+    const lo = binary.charCodeAt(i * 2);
+    const hi = binary.charCodeAt(i * 2 + 1);
+    let v = lo | (hi << 8);
+    if (v & 0x8000) v -= 0x10000;
+    sumSq += v * v;
+  }
+  return Math.sqrt(sumSq / samples);
+}
+
 /**
  * Strip the RIFF/WAVE container from a base64 WAV and return the raw PCM
  * payload (still base64). Scans for the "data" subchunk rather than
@@ -132,9 +171,12 @@ interface Comment {
 
 const { height: SCREEN_H } = Dimensions.get("window");
 
-// Wake word variants — "panda", "hey panda", "ok panda", "yo panda", "panda go"
-const WAKE_WORDS = /(?:^|\s)(hey\s+panda|ok\s+panda|yo\s+panda|panda\s+go|panda)(?:\s|,|!|$)/i;
-const PANDA_STOP_RE = /(?:^|\s)(?:hey\s+)?panda\s+stop(?:\s|,|!|\.|$)/i;
+// Wake word — any phrase containing "panda" (or a common ASR mishear: pando,
+// panta, ponda, banda, bando). Prefix like "hey"/"ok"/"yo" is optional; the
+// only requirement is that the word appears somewhere in the transcript.
+const PANDA_ALIASES = "p[ao]nd[ao]|p[ao]nt[ao]|b[ao]nd[ao]";
+const WAKE_WORDS = new RegExp(`\\b(?:${PANDA_ALIASES})\\b`, "i");
+const PANDA_STOP_RE = new RegExp(`\\b(?:${PANDA_ALIASES})\\s+stop\\b`, "i");
 const APP_CONTROL_RE = /\b(go live|end stream|mute|unmute|flip camera|emoji mode|hype|shoutout|countdown|create poll|close poll|go to|open|take my photo|take pictures|photo shoot|what am i wearing|rate my fit|find my outfit|change your voice|change voice|pull up|show .*clip|play .*clip|find .*clip|nike|adidas|puma|jordan|air max|samba|shoe|shoes|sneaker|sneakers|hoodie|shirt|jacket|bag|hat)\b/i;
 
 const PANDA_COMMANDS = [
@@ -393,6 +435,11 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       if (!b64wav) return;
       const b64pcm = stripWavHeaderBase64(b64wav);
       if (!b64pcm) return;
+
+      // Don't ship silence — Gemini's transcriber will hallucinate over it.
+      const rms = pcmRmsFromBase64(b64pcm);
+      if (rms < PANDA_SILENCE_RMS_THRESHOLD) return;
+
       ws.send(JSON.stringify({
         realtimeInput: {
           audio: { data: b64pcm, mimeType: "audio/pcm;rate=16000" },
@@ -421,13 +468,20 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,
-          silenceDurationMs: 800,
-          prefixPaddingMs: 300,
+          // Give the streamer a full breath between the wake word and the command
+          // so Gemini doesn't split "panda / what's the weather" into two turns
+          // (the second turn would have no wake word and trigger SILENT).
+          silenceDurationMs: 1500,
+          prefixPaddingMs: 400,
           endOfSpeechSensitivity: "END_SENSITIVITY_UNSPECIFIED",
           startOfSpeechSensitivity: "START_SENSITIVITY_UNSPECIFIED",
         },
-        activityHandling: "START_OF_ACTIVITY_INTERRUPTS",
-        turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+        // Don't let fresh audio chatter cancel an in-flight Panda reply —
+        // wait for the response to finish, then start listening again.
+        activityHandling: "NO_INTERRUPTION",
+        // Carry natural pauses inside a turn so short phrases like "hey panda"
+        // stay attached to the follow-up question.
+        turnCoverage: "TURN_INCLUDES_ALL_INPUT",
       },
       // Gemini's own transcript of the user's speech, so we can show it
       // in chat without running a second REST transcription.
@@ -435,13 +489,13 @@ export default function LiveStreamScreen({ onAssistantAction, pendingAction, onP
       systemInstruction: {
         parts: [{ text: `You are Panda, a live voice assistant inside a streaming app.
 
-You continuously hear the streamer's audio. They are a live streamer talking to their audience, NOT always talking to you. You must NOT respond to every turn.
+You continuously hear the streamer. They are broadcasting to an audience and most of their speech is NOT directed at you, so you must NOT respond to every turn.
 
-Strict rules:
-1. If the streamer clearly addressed you by name ("Panda", "hey panda", "ok panda", "yo panda"), respond conversationally in 1-2 sentences — warm, short, direct, no JSON.
-2. If the streamer did NOT address you by name in the current turn, reply with the exact single word: SILENT
-3. Never explain why you are silent. Never apologise. If in doubt, output SILENT.
-4. Do not use JSON.` }],
+Rules:
+1. If the streamer addressed you in the current turn OR the immediately preceding turn — by saying "Panda", "hey panda", "ok panda", or "yo panda" — respond conversationally in 1-2 sentences. Warm, short, direct, no JSON.
+2. If there is no mention of your name in the current or previous turn, reply with the exact single word: SILENT
+3. When in doubt — if the speech could plausibly be addressed to you — RESPOND. Don't default to silent when the streamer has recently said your name.
+4. Never explain being silent. Never apologise. Do not use JSON.` }],
       },
     },
   }), []);
@@ -888,7 +942,8 @@ Strict rules:
   // came from the REST /api/transcribe (Android / pre-live) or from Gemini's
   // continuous inputAudioTranscription stream (iOS always-on path).
   const handleStreamerTranscript = useCallback((raw: string) => {
-    const transcript = raw.trim();
+    // Clean up ASR mishears of the wake word so chat + context consistently show "panda".
+    const transcript = raw.trim().replace(new RegExp(`\\b(?:${PANDA_ALIASES})\\b`, "gi"), "panda");
     if (!transcript) return;
 
     if (isPandaEcho(transcript)) {
@@ -974,7 +1029,6 @@ Strict rules:
         pandaLiveReadyRef.current;
       try {
         const preset = pandaPcmStreaming ? PANDA_PCM_RECORDING_OPTIONS : SPEECH_RECORDING_PRESET;
-        const chunkMs = pandaPcmStreaming ? PANDA_PCM_CHUNK_MS : AUDIO_CHUNK_MS;
         const rec = new AudioModule.AudioRecorder(preset);
         audioRecordingRef.current = rec;
         await rec.prepareToRecordAsync();
@@ -986,13 +1040,38 @@ Strict rules:
           if (phoneMic) rec.setInput(phoneMic.uid);
         }
         rec.record();
-        await new Promise(r => setTimeout(r, chunkMs));
+
+        let sawSpeech = false;
+        if (pandaPcmStreaming) {
+          // PCM path: Gemini Live runs its own VAD, so just hand it short fixed chunks.
+          await new Promise(r => setTimeout(r, PANDA_PCM_CHUNK_MS));
+        } else {
+          // REST path: wait for a natural pause before flushing so sentences stay whole.
+          let silentMs = 0;
+          let elapsedMs = 0;
+          while (isAudioLoopRef.current && elapsedMs < AUDIO_VAD_MAX_CHUNK_MS) {
+            await new Promise(r => setTimeout(r, AUDIO_VAD_POLL_MS));
+            elapsedMs += AUDIO_VAD_POLL_MS;
+            const meter = rec.getStatus().metering;
+            const isSpeaking = typeof meter === "number" && meter > AUDIO_VAD_SILENCE_DB;
+            if (isSpeaking) {
+              sawSpeech = true;
+              silentMs = 0;
+            } else {
+              silentMs += AUDIO_VAD_POLL_MS;
+            }
+            // Only end the chunk once there's been real speech followed by a clear pause.
+            if (sawSpeech && elapsedMs >= AUDIO_VAD_MIN_SPEECH_MS && silentMs >= AUDIO_VAD_SILENCE_TAIL_MS) break;
+          }
+        }
+
         await rec.stop();
         audioRecordingRef.current = null;
         const uri = rec.uri;
         if (uri && isAudioLoopRef.current) {
           if (pandaPcmStreaming) streamPcmChunkToPanda(uri);
-          else processAudioChunk(uri);
+          else if (sawSpeech) processAudioChunk(uri);
+          else FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
         }
       } catch (err) {
         console.warn("[Audio loop] Error:", err);
