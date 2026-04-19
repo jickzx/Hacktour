@@ -11,7 +11,8 @@ import {
 } from "react-native";
 import * as Speech from "expo-speech";
 import { LinearGradient } from "expo-linear-gradient";
-import { COLORS, RADII, SPACING } from "../constants/theme";
+import { Ionicons } from "@expo/vector-icons";
+import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS } from "../constants/theme";
 import {
   DEFAULT_VOICE_SETTINGS,
   loadVoiceSettings,
@@ -19,18 +20,26 @@ import {
   VoiceSettings,
   VOICE_PRESETS,
 } from "../services/voiceSettings";
-
-const LANGUAGES: { code: string; label: string }[] = [
-  { code: "en-US", label: "English (US)" },
-  { code: "en-GB", label: "English (UK)" },
-  { code: "en-AU", label: "English (AU)" },
-  { code: "es-ES", label: "Spanish" },
-  { code: "fr-FR", label: "French" },
-  { code: "de-DE", label: "German" },
-  { code: "ja-JP", label: "Japanese" },
-];
+import { useLanguage } from "../context/LanguageContext";
 
 export default function SettingsScreen() {
+  const { t } = useLanguage();
+  const LANGUAGES = [
+    { code: "en-US", label: t("langEnUS") },
+    { code: "en-GB", label: t("langEnGB") },
+    { code: "en-AU", label: t("langEnAU") },
+    { code: "es-ES", label: t("langEs") },
+    { code: "fr-FR", label: t("langFr") },
+    { code: "de-DE", label: t("langDe") },
+    { code: "ja-JP", label: t("langJa") },
+  ];
+  const PRESET_LABELS: Record<string, string> = {
+    "Default": t("presetDefault"),
+    "Chill": t("presetChill"),
+    "Hype": t("presetHype"),
+    "Deep": t("presetDeep"),
+    "Chipmunk": t("presetChipmunk"),
+  };
   const [settings, setSettings] = useState<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
   const [voices, setVoices] = useState<Speech.Voice[]>([]);
 
@@ -55,23 +64,25 @@ export default function SettingsScreen() {
   };
 
   const stepper = (label: string, value: number, min: number, max: number, step: number, onChange: (n: number) => void) => (
-    <View style={styles.stepperRow}>
-      <Text style={styles.stepperLabel}>{label}</Text>
-      <View style={styles.stepperCtrl}>
+    <View style={s.stepperRow}>
+      <Text style={s.stepperLabel}>{label}</Text>
+      <View style={s.stepperCtrl}>
         <TouchableOpacity
-          style={styles.stepBtn}
+          style={s.stepBtn}
           onPress={() => onChange(Math.max(min, +(value - step).toFixed(2)))}
           activeOpacity={0.7}
         >
-          <Text style={styles.stepBtnText}>−</Text>
+          <Text style={s.stepBtnMinus}>−</Text>
         </TouchableOpacity>
-        <Text style={styles.stepperValue}>{value.toFixed(2)}×</Text>
+        <View style={s.valuePill}>
+          <Text style={s.stepperValue}>{value.toFixed(2)}×</Text>
+        </View>
         <TouchableOpacity
-          style={styles.stepBtn}
+          style={s.stepBtn}
           onPress={() => onChange(Math.min(max, +(value + step).toFixed(2)))}
           activeOpacity={0.7}
         >
-          <Text style={styles.stepBtnText}>+</Text>
+          <Text style={s.stepBtnPlus}>+</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -82,77 +93,130 @@ export default function SettingsScreen() {
     .slice(0, 12);
 
   return (
-    <View style={styles.root}>
-      <LinearGradient colors={[COLORS.background, COLORS.uploadBg, COLORS.background]} style={StyleSheet.absoluteFill} />
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <LinearGradient colors={[COLORS.gradientStart, COLORS.gradientEnd]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.logoBar} />
-          <Text style={styles.brand}>Settings</Text>
-          <Text style={styles.tagline}>Gemini Voice</Text>
+    <View style={s.root}>
+      <LinearGradient
+        colors={["#0A0A0C", COLORS.background, "#0A0A0C"]}
+        style={StyleSheet.absoluteFill}
+      />
+
+      <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+        {/* ── Gradient header ── */}
+        <View style={s.headerWrap}>
+          <LinearGradient
+            colors={["#1A0A0E", COLORS.primaryDark, "#1A0A0E"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={s.headerGrad}
+          >
+            <LinearGradient
+              colors={[COLORS.gradientStart, COLORS.gradientEnd]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={s.logoBar}
+            />
+            <Text style={s.brand}>{t("settingsTitle")}</Text>
+            <Text style={s.tagline}>{t("geminiVoice")}</Text>
+          </LinearGradient>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Presets</Text>
-          <View style={styles.presetRow}>
+        {/* ── Presets ── */}
+        <View style={s.card}>
+          <Text style={s.cardTitle}>{t("presets")}</Text>
+          <View style={s.chipWrap}>
             {VOICE_PRESETS.map((p) => (
               <TouchableOpacity
                 key={p.label}
-                style={styles.presetChip}
+                style={s.presetChip}
                 onPress={() => patch(p.patch)}
                 activeOpacity={0.8}
               >
-                <Text style={styles.presetText}>{p.label}</Text>
+                <LinearGradient
+                  colors={[COLORS.primaryDark, COLORS.primary]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={s.presetGrad}
+                >
+                  <Text style={s.presetText}>{PRESET_LABELS[p.label] ?? p.label}</Text>
+                </LinearGradient>
               </TouchableOpacity>
             ))}
           </View>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Speech</Text>
-          {stepper("Rate", settings.rate, 0.5, 2.0, 0.05, (v) => patch({ rate: v }))}
-          {stepper("Pitch", settings.pitch, 0.5, 2.0, 0.05, (v) => patch({ pitch: v }))}
+        {/* ── Speech ── */}
+        <View style={s.card}>
+          <Text style={s.cardTitle}>{t("speech")}</Text>
+          {stepper(t("rate"), settings.rate, 0.5, 2.0, 0.05, (v) => patch({ rate: v }))}
+          <View style={s.divider} />
+          {stepper(t("pitch"), settings.pitch, 0.5, 2.0, 0.05, (v) => patch({ pitch: v }))}
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Language</Text>
-          <View style={styles.chipWrap}>
+        {/* ── Language ── */}
+        <View style={s.card}>
+          <Text style={s.cardTitle}>{t("voiceLanguage")}</Text>
+          <View style={s.chipWrap}>
             {LANGUAGES.map((l) => {
               const active = settings.language === l.code;
               return (
                 <TouchableOpacity
                   key={l.code}
-                  style={[styles.chip, active && styles.chipActive]}
+                  style={[s.chip, active && s.chipActive]}
                   onPress={() => patch({ language: l.code, voiceId: undefined })}
                   activeOpacity={0.8}
                 >
-                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{l.label}</Text>
+                  {active && (
+                    <LinearGradient
+                      colors={[COLORS.gradientStart, COLORS.gradientEnd]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                  )}
+                  <Text style={[s.chipText, active && s.chipTextActive]}>{l.label}</Text>
                 </TouchableOpacity>
               );
             })}
           </View>
         </View>
 
+        {/* ── Voice ── */}
         {voiceOptions.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Voice</Text>
-            <View style={styles.chipWrap}>
+          <View style={s.card}>
+            <Text style={s.cardTitle}>{t("voice")}</Text>
+            <View style={s.chipWrap}>
               <TouchableOpacity
-                style={[styles.chip, !settings.voiceId && styles.chipActive]}
+                style={[s.chip, !settings.voiceId && s.chipActive]}
                 onPress={() => patch({ voiceId: undefined })}
                 activeOpacity={0.8}
               >
-                <Text style={[styles.chipText, !settings.voiceId && styles.chipTextActive]}>System default</Text>
+                {!settings.voiceId && (
+                  <LinearGradient
+                    colors={[COLORS.gradientStart, COLORS.gradientEnd]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={StyleSheet.absoluteFill}
+                  />
+                )}
+                <Text style={[s.chipText, !settings.voiceId && s.chipTextActive]}>{t("systemDefault")}</Text>
               </TouchableOpacity>
               {voiceOptions.map((v) => {
                 const active = settings.voiceId === v.identifier;
                 return (
                   <TouchableOpacity
                     key={v.identifier}
-                    style={[styles.chip, active && styles.chipActive]}
+                    style={[s.chip, active && s.chipActive]}
                     onPress={() => patch({ voiceId: v.identifier })}
                     activeOpacity={0.8}
                   >
-                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                    {active && (
+                      <LinearGradient
+                        colors={[COLORS.gradientStart, COLORS.gradientEnd]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={StyleSheet.absoluteFill}
+                      />
+                    )}
+                    <Text style={[s.chipText, active && s.chipTextActive]}>
                       {v.name || v.identifier.slice(-14)}
                     </Text>
                   </TouchableOpacity>
@@ -162,97 +226,238 @@ export default function SettingsScreen() {
           </View>
         )}
 
-        <TouchableOpacity style={styles.previewBtn} onPress={preview} activeOpacity={0.85}>
+        {/* ── Preview ── */}
+        <TouchableOpacity style={s.previewBtn} onPress={preview} activeOpacity={0.85}>
           <LinearGradient
-            colors={[COLORS.gradientStart, COLORS.gradientEnd]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.previewGrad}
+            colors={["#FF2442", "#FF6B81"]}
+            start={{ x: 0, y: 0.5 }}
+            end={{ x: 1, y: 0.5 }}
+            style={s.previewGrad}
           >
-            <Text style={styles.previewText}>▶ Preview Voice</Text>
+            <Ionicons name="play" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+            <Text style={s.previewText}>{t("previewVoice")}</Text>
           </LinearGradient>
         </TouchableOpacity>
 
+        {/* ── Reset ── */}
         <TouchableOpacity
-          style={styles.resetBtn}
+          style={s.resetBtn}
           onPress={() => patch(DEFAULT_VOICE_SETTINGS)}
           activeOpacity={0.7}
         >
-          <Text style={styles.resetText}>Reset to defaults</Text>
+          <Text style={s.resetText}>{t("resetDefaults")}</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.background },
-  content: { paddingHorizontal: SPACING.lg, paddingTop: SPACING.xxl + 16, paddingBottom: 120 },
-  header: { alignItems: "center", marginBottom: SPACING.lg },
-  logoBar: { width: 40, height: 4, borderRadius: 2, marginBottom: SPACING.md },
-  brand: { fontSize: 28, fontWeight: "800", color: COLORS.text, letterSpacing: -0.5 },
-  tagline: { fontSize: 14, color: COLORS.textSecondary, marginTop: SPACING.xs, letterSpacing: 2, textTransform: "uppercase" },
-  card: {
-    backgroundColor: COLORS.surface,
-    borderColor: COLORS.surfaceBorder,
+const s = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+
+  content: {
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.xxl + 8,
+    paddingBottom: 120,
+  },
+
+  /* ── Header ── */
+  headerWrap: {
+    borderRadius: RADII.xl,
+    overflow: "hidden",
+    marginBottom: SPACING.lg,
     borderWidth: 1,
-    borderRadius: RADII.lg,
+    borderColor: "#2A2A2E",
+  },
+  headerGrad: {
+    paddingTop: SPACING.xl,
+    paddingBottom: SPACING.lg,
+    paddingHorizontal: SPACING.lg,
+    alignItems: "center",
+  },
+  logoBar: {
+    width: 48,
+    height: 4,
+    borderRadius: 2,
+    marginBottom: SPACING.md,
+  },
+  brand: {
+    fontSize: FONT_SIZES.hero,
+    fontWeight: WEIGHTS.heavy,
+    color: COLORS.text,
+    letterSpacing: -0.5,
+  },
+  tagline: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: WEIGHTS.medium,
+    color: COLORS.textSecondary,
+    marginTop: SPACING.xs,
+    letterSpacing: 3,
+    textTransform: "uppercase",
+  },
+
+  /* ── Card ── */
+  card: {
+    backgroundColor: "#111113",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#2A2A2E",
     padding: SPACING.md,
     marginBottom: SPACING.md,
   },
   cardTitle: {
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 2,
-    color: COLORS.textSecondary,
+    fontSize: FONT_SIZES.xs,
+    fontWeight: WEIGHTS.bold,
+    letterSpacing: 2.5,
+    color: COLORS.textMuted,
     textTransform: "uppercase",
-    marginBottom: SPACING.sm,
+    marginBottom: SPACING.sm + 2,
   },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#2A2A2E",
+    marginVertical: SPACING.sm - 2,
+  },
+
+  /* ── Stepper ── */
   stepperRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingVertical: SPACING.sm,
   },
-  stepperLabel: { fontSize: 15, fontWeight: "600", color: COLORS.text },
-  stepperCtrl: { flexDirection: "row", alignItems: "center", gap: SPACING.sm },
+  stepperLabel: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: WEIGHTS.semibold,
+    color: COLORS.text,
+  },
+  stepperCtrl: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.sm,
+  },
   stepBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: COLORS.surfaceLight,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: COLORS.surfaceElevated,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: COLORS.surfaceBorder,
+    borderColor: "#2A2A2E",
   },
-  stepBtnText: { color: COLORS.text, fontSize: 18, fontWeight: "800" },
-  stepperValue: { color: COLORS.text, fontSize: 15, fontWeight: "700", minWidth: 60, textAlign: "center" },
-  chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: SPACING.sm },
+  stepBtnMinus: {
+    color: COLORS.textSecondary,
+    fontSize: 20,
+    fontWeight: WEIGHTS.heavy,
+    marginTop: -1,
+  },
+  stepBtnPlus: {
+    color: COLORS.gradientEnd,
+    fontSize: 18,
+    fontWeight: WEIGHTS.heavy,
+  },
+  valuePill: {
+    backgroundColor: COLORS.surfaceElevated,
+    borderRadius: RADII.full,
+    paddingVertical: SPACING.xs + 1,
+    paddingHorizontal: SPACING.md,
+    borderWidth: 1,
+    borderColor: "#2A2A2E",
+    minWidth: 68,
+    alignItems: "center",
+  },
+  stepperValue: {
+    color: COLORS.text,
+    fontSize: FONT_SIZES.md,
+    fontWeight: WEIGHTS.bold,
+  },
+
+  /* ── Chips ── */
+  chipWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: SPACING.sm,
+  },
   chip: {
-    paddingHorizontal: SPACING.md,
+    paddingHorizontal: SPACING.md + 2,
     paddingVertical: SPACING.sm,
     borderRadius: RADII.full,
-    backgroundColor: COLORS.surfaceLight,
+    backgroundColor: COLORS.surfaceElevated,
     borderWidth: 1,
-    borderColor: COLORS.surfaceBorder,
+    borderColor: "#2A2A2E",
+    overflow: "hidden",
+    justifyContent: "center",
+    alignItems: "center",
   },
-  chipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primaryLight },
-  chipText: { fontSize: 13, color: COLORS.textSecondary, fontWeight: "600" },
-  chipTextActive: { color: "#fff" },
-  presetRow: { flexDirection: "row", flexWrap: "wrap", gap: SPACING.sm },
+  chipActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primary,
+  },
+  chipText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary,
+    fontWeight: WEIGHTS.semibold,
+  },
+  chipTextActive: {
+    color: "#fff",
+    fontWeight: WEIGHTS.bold,
+  },
+
+  /* ── Preset chips ── */
   presetChip: {
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
     borderRadius: RADII.full,
-    backgroundColor: COLORS.primaryDark,
-    borderWidth: 1,
-    borderColor: COLORS.primaryLight,
+    overflow: "hidden",
   },
-  presetText: { color: "#fff", fontSize: 13, fontWeight: "700" },
-  previewBtn: { marginTop: SPACING.sm, borderRadius: RADII.lg, overflow: "hidden" },
-  previewGrad: { paddingVertical: SPACING.md, alignItems: "center" },
-  previewText: { color: "#fff", fontWeight: "800", fontSize: 15 },
-  resetBtn: { marginTop: SPACING.md, alignItems: "center", padding: SPACING.sm },
-  resetText: { color: COLORS.textMuted, fontSize: 13, textDecorationLine: "underline" },
+  presetGrad: {
+    paddingHorizontal: SPACING.md + 2,
+    paddingVertical: SPACING.sm + 1,
+    borderRadius: RADII.full,
+  },
+  presetText: {
+    color: "#fff",
+    fontSize: FONT_SIZES.sm,
+    fontWeight: WEIGHTS.bold,
+  },
+
+  /* ── Preview button ── */
+  previewBtn: {
+    marginTop: SPACING.sm,
+    borderRadius: RADII.lg,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(255,107,129,0.3)",
+  },
+  previewGrad: {
+    paddingVertical: SPACING.md + 4,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: SPACING.sm,
+  },
+  previewIcon: {
+    color: "#fff",
+    fontSize: FONT_SIZES.lg,
+  },
+  previewText: {
+    color: "#fff",
+    fontWeight: WEIGHTS.heavy,
+    fontSize: FONT_SIZES.lg,
+    letterSpacing: 0.5,
+  },
+
+  /* ── Reset ── */
+  resetBtn: {
+    marginTop: SPACING.md,
+    alignItems: "center",
+    paddingVertical: SPACING.sm,
+  },
+  resetText: {
+    color: COLORS.textMuted,
+    fontSize: FONT_SIZES.sm,
+    textDecorationLine: "underline",
+  },
 });

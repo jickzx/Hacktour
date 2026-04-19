@@ -1,22 +1,20 @@
 /**
- * Hacktour theme — Xiaohongshu (rednote) dark mode clone.
- * Pure black surfaces, coral-red primary, system font (SF Pro / Roboto).
+ * Hacktour theme — Xiaohongshu-inspired dark mode design system.
+ * Content-first minimalism, generous whitespace, warm coral-red accents.
  */
 import { Platform } from "react-native";
 
 export const COLORS = {
-  // Brand red (XHS)
   primary: "#FF2442",
   primaryLight: "#FF6B81",
   primaryDark: "#E01E3C",
   primaryBg: "rgba(255,36,66,0.15)",
+  primaryBgStrong: "rgba(255,36,66,0.25)",
 
-  // Accent (orange/coral)
   accent: "#FF8A00",
   accentLight: "#FFB347",
   accentDim: "rgba(255,138,0,0.2)",
 
-  // Dark surfaces
   background: "#000000",
   surface: "#111113",
   surfaceElevated: "#1A1A1D",
@@ -24,37 +22,44 @@ export const COLORS = {
   surfaceBorder: "#2A2A2E",
   uploadBg: "#0E0E10",
 
-  // Text
   text: "#FFFFFF",
   textSecondary: "rgba(255,255,255,0.6)",
   textMuted: "rgba(255,255,255,0.38)",
   textOnPrimary: "#FFFFFF",
 
-  // Borders
   border: "#2A2A2E",
   borderLight: "#1C1C1F",
 
-  // States
   error: "#FF2442",
   success: "#00C853",
+  warning: "#FFB347",
+  info: "#64B5F6",
 
-  // Overlays
   overlay: "rgba(0,0,0,0.45)",
   overlayLight: "rgba(0,0,0,0.25)",
   overlayDark: "rgba(0,0,0,0.7)",
 
-  // Gradients
   gradientStart: "#FF2442",
   gradientEnd: "#FF6B81",
 
-  // Live stream
   liveRed: "#FF2442",
   chatBg: "rgba(0,0,0,0.35)",
 
-  // Glossy panels (dark frosted)
   glassLight: "rgba(30,30,34,0.65)",
   glassDark: "rgba(10,10,12,0.72)",
   glassBorder: "rgba(255,255,255,0.08)",
+
+  shimmerBase: "#1A1A1D",
+  shimmerHighlight: "#2A2A2E",
+
+  tagBg: "rgba(255,36,66,0.12)",
+  tagText: "#FF6B81",
+
+  green: "#34D399",
+  greenBg: "rgba(52,211,153,0.15)",
+  purple: "#A855F7",
+  purpleBg: "rgba(168,85,247,0.2)",
+  yellow: "#FACC15",
 };
 
 export const SPACING = {
@@ -67,10 +72,12 @@ export const SPACING = {
 };
 
 export const RADII = {
+  xs: 4,
   sm: 6,
   md: 10,
   lg: 16,
   xl: 20,
+  xxl: 28,
   full: 9999,
 };
 
@@ -85,22 +92,6 @@ export const FONT_SIZES = {
   hero: 32,
 };
 
-/**
- * System font — SF Pro on iOS, Roboto on Android.
- * Weights are expressed via `fontWeight` on iOS; Android uses weight-named families.
- * Using `undefined` for fontFamily lets the platform pick the default system font.
- */
-const systemFont = Platform.select({ ios: undefined, default: undefined });
-
-export const FONTS = {
-  light: systemFont,
-  regular: systemFont,
-  medium: systemFont,
-  semibold: systemFont,
-  bold: systemFont,
-};
-
-/** Numeric weights matching the old fontFamily slots — use with `fontWeight`. */
 export const WEIGHTS = {
   light: "300" as const,
   regular: "400" as const,
@@ -109,3 +100,37 @@ export const WEIGHTS = {
   bold: "700" as const,
   heavy: "800" as const,
 };
+
+export const SHADOWS = {
+  card: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  float: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  fab: {
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+};
+
+export const ANIMATIONS = {
+  spring: { tension: 80, friction: 12, useNativeDriver: true },
+  fast: { duration: 150, useNativeDriver: true },
+  normal: { duration: 300, useNativeDriver: true },
+  slow: { duration: 500, useNativeDriver: true },
+};
+
+/** Safe area insets for bottom padding */
+export const SAFE_BOTTOM = Platform.OS === "ios" ? 34 : 16;

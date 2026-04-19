@@ -53,6 +53,16 @@ router.get("/clips/:id", (req, res) => {
   res.json({ success: true, clip });
 });
 
+/** DELETE /clips/:id — remove a clip from the library */
+router.delete("/clips/:id", (req, res) => {
+  const deleted = clipStore.deleteClip(req.params.id);
+  if (!deleted) {
+    res.status(404).json({ success: false, error: "Clip not found" });
+    return;
+  }
+  res.json({ success: true });
+});
+
 /** POST /clips/search — semantic search by query text */
 router.post<{}, {}, SearchClipsRequest>("/clips/search", async (req, res) => {
   const { query, limit = 10 } = req.body;

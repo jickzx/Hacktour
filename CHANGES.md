@@ -176,3 +176,41 @@ EXPO_PUBLIC_BACKEND_URL=https://your-ngrok-url.ngrok-free.app
 - Expo dev server on `eduroam`: use `npm run tunnel` (not `npm start`)
 - Backend on `eduroam`: run `npx ngrok http 3001` in a **separate terminal** alongside `bun run dev`
 - After ngrok restarts, update `EXPO_PUBLIC_BACKEND_URL` in `mobile/.env` and reload app
+
+---
+
+## 11. FIXED — Home feed images zoomed to top-left corner
+
+**File:** `mobile/src/screens/HomeScreen.tsx`
+**Branch state:** uncommitted changes on `main` — see `git diff mobile/src/screens/HomeScreen.tsx`
+
+### Symptom
+On the phone, every `imageSource` post on the Home feed renders only the top-left corner of the image at massive zoom. Confirmed on screenshot: reproduced across all image posts (summerintern, claude-code, imperial-f1, ucl-couple, linkedin-dalao, hk-school, ucas-offers, jpmorgan, goldman-question).
+
+### What was tried this session
+1. Measured native image dimensions with `expo-image-utils` / `Image.resolveAssetSource` and set each post's `ratio` field to the actual `height / width` of the PNG (values now all ~1.31–1.39 instead of the previous hand-guessed 1.0–1.65). Container uses `aspectRatio: 1 / post.ratio`.
+2. Removed the `imageOffsetY` `translateY` overrides.
+3. Switched `<Image resizeMode>` from `"cover"` to `"contain"`.
+4. Reload + cache-clear on device.
+
+**None fixed it.** Still zoomed to top-left on device.
+
+### Hypotheses to investigate next session
+- Phone is still serving a stale JS bundle (asset require paths unchanged → Metro may cache). Verify by changing a visible text string and confirming it shows on device. If text doesn't update, it's a bundler/cache issue, not a layout issue.
+- `post.ratio` semantics: code uses `aspectRatio: 1 / post.ratio` and sets `ratio = height / width`. That yields `aspectRatio = width / height` (correct for RN). But double-check by logging actual container width/height at render.
+- Possible double-wrapping: some parent View may have `overflow: hidden` + fixed dimensions that don't match the `aspectRatio` child, causing the image to render at full intrinsic pixel size (hence "top-left corner zoom" symptom — classic sign of image rendering at native resolution inside a smaller clipping box).
+- Check whether `StyleSheet.absoluteFill` is fighting with something — try explicit `{ width: "100%", height: "100%" }` instead.
+- Try `resizeMode="stretch"` as a diagnostic: if that shows the full image (distorted), the issue is container sizing. If still cropped top-left, the issue is deeper (possibly a parent layout bug).
+
+### Current uncommitted diff (summary)
+- Updated `ratio` values on 9 imageSource posts to measured native aspect ratios
+- Removed `imageOffsetY` transform from `<Image>` style
+- `resizeMode="cover"` → `"contain"`
+- Also modified: `mobile/.env` (ngrok URL)
+- Deleted 4 legacy asset files: `goldman-jpmorgan.png`, `hk-guy.png`, `london-food.png`, `title-dalao.png`
+
+### Root cause
+`styles.card` had no explicit width. In the flex column with an absolute-positioned `<Image>` child, the `aspectRatio` on `thumbWrap` had nothing to measure against, so the layout collapsed to the image's native pixel dimensions (555×752). The Image rendered at its intrinsic size, overflowing the clipped column — which manifested as "top-left zoom."
+
+### Fix
+Added `width: "100%", alignSelf: "stretch"` to both `styles.card` and `styles.thumbWrap`. Verified via `onLayout` logs: thumbWrap now sizes to ~185×250 (column width × aspectRatio) as expected. `resizeMode` restored to `"cover"`.

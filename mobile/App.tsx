@@ -3,7 +3,7 @@
  * Sets global default text colour so every screen inherits white-on-dark.
  */
 import { useState, useCallback, useEffect } from "react";
-import { View, StyleSheet, Text, Platform } from "react-native";
+import { View, StyleSheet } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import AIEditScreen from "./src/screens/AIEditScreen";
 import LiveStreamScreen from "./src/screens/LiveStreamScreen";
@@ -12,6 +12,7 @@ import LibraryScreen from "./src/screens/LibraryScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import BottomNavBar, { Tab } from "./src/components/BottomNavBar";
 import { COLORS } from "./src/constants/theme";
+import { LanguageProvider } from "./src/context/LanguageContext";
 import { loadVoiceSettings } from "./src/services/voiceSettings";
 
 export type AssistantAction = {
@@ -35,19 +36,6 @@ export type AssistantAction = {
   language?: string;
 };
 
-/** Force all Text nodes to default to white so dark-mode screens don't need per-component colour props */
-(function applyGlobalTextColor() {
-  const TextAny = Text as any;
-  TextAny.defaultProps = TextAny.defaultProps || {};
-  TextAny.defaultProps.style = [
-    {
-      color: COLORS.text,
-      fontFamily: Platform.OS === "ios" ? "System" : undefined,
-    },
-    TextAny.defaultProps.style,
-  ];
-})();
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("edit");
   const [pendingAction, setPendingAction] = useState<AssistantAction | null>(null);
@@ -63,6 +51,7 @@ export default function App() {
   }, []);
 
   return (
+    <LanguageProvider>
     <View style={styles.root}>
       <StatusBar style="light" />
 
@@ -88,6 +77,7 @@ export default function App() {
 
       <BottomNavBar activeTab={activeTab} onTabPress={setActiveTab} />
     </View>
+    </LanguageProvider>
   );
 }
 

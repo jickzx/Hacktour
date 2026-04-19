@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { useVideoPlayer, VideoView } from "expo-video";
+import { Ionicons } from "@expo/vector-icons";
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 const CARD_W = 220;
@@ -117,7 +118,7 @@ export default function ClipOverlay({ clip, onClose }: Props) {
             nativeControls={false}
           />
           <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
-            <Text style={styles.closeBtnText}>✕</Text>
+            <Ionicons name="close" size={16} color="#FFFFFF" />
           </TouchableOpacity>
         </Animated.View>
       </View>
