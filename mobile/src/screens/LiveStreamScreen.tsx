@@ -1558,25 +1558,39 @@ Rules:
     const TENOR_KEY = "LIVDSRZULELA";
     let cancelled = false;
 
+    async function searchTenor(term: string, locale?: string): Promise<string | null> {
+      const params = `q=${encodeURIComponent(term)}&key=${TENOR_KEY}&limit=8&contentfilter=medium&media_filter=minimal${locale ? `&locale=${locale}` : ""}`;
+      const res = await fetch(`https://api.tenor.com/v1/search?${params}`);
+      const json = await res.json() as any;
+      const results = json.results;
+      if (!results?.length) return null;
+      const pick = results[Math.floor(Math.random() * Math.min(5, results.length))];
+      return pick.media?.[0]?.gif?.url ?? pick.media?.[0]?.tinygif?.url ?? pick.media?.[0]?.mediumgif?.url ?? null;
+    }
+
     async function fireGif() {
       if (cancelled) return;
       const context = transcriptContextRef.current.slice(-4).join(" ").trim();
       if (!context) return;
       try {
-        // Ask Gemini (via backend) for a search term — or just use Tenor directly with a keyword from context
         const words = context.replace(/[^a-z0-9\s]/gi, " ").split(/\s+/).filter(w => w.length > 3);
         if (!words.length) return;
-        const term = words.slice(-2).join(" ");
-        const url = `https://api.tenor.com/v1/search?q=${encodeURIComponent(term)}&key=${TENOR_KEY}&limit=8&contentfilter=medium&media_filter=minimal`;
-        const res = await fetch(url);
-        const json = await res.json() as any;
-        const results = json.results;
-        if (!results?.length || cancelled) return;
-        const pick = results[Math.floor(Math.random() * Math.min(5, results.length))];
-        const gifUrl = pick.media?.[0]?.gif?.url ?? pick.media?.[0]?.tinygif?.url ?? pick.media?.[0]?.mediumgif?.url;
+        const baseTerm = words.slice(-2).join(" ");
+        const useChinese = Math.random() < 0.5;
+
+        let gifUrl: string | null = null;
+        if (useChinese) {
+          gifUrl = await searchTenor(baseTerm + " 中文", "zh_CN");
+          if (!gifUrl) gifUrl = await searchTenor(baseTerm); // English fallback
+        } else {
+          gifUrl = await searchTenor(baseTerm);
+        }
+
         if (!gifUrl || cancelled) return;
-        const names = ["😂 viewer", "🔥 chat", "💀 fan", "👀 viewer", "😭 chat"];
-        const name = names[Math.floor(Math.random() * names.length)];
+        const cnNames = ["😂 小红书用户", "🔥 观众", "💀 粉丝", "👀 网友", "😭 弹幕"];
+        const enNames = ["😂 viewer", "🔥 chat", "💀 fan", "👀 viewer", "😭 chat"];
+        const namePool = useChinese ? cnNames : enNames;
+        const name = namePool[Math.floor(Math.random() * namePool.length)];
         pushComment({ id: `gif-${Date.now()}`, user: name, text: "", avatar: "🎭", gifUrl });
       } catch {}
     }
