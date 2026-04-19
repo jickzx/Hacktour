@@ -9,7 +9,6 @@ interface Props {
   question: string;
   options: string[];
   onClose: () => void;
-  /** Fires when new AI comments arrive so we can auto-tally votes */
   latestComment?: string;
 }
 
@@ -18,7 +17,6 @@ export default function PollOverlay({ question, options, onClose, latestComment 
   const slideAnim = useRef(new Animated.Value(-300)).current;
   const totalVotes = votes.reduce((a, b) => a + b, 0);
 
-  // Slide in on mount
   useEffect(() => {
     Animated.spring(slideAnim, {
       toValue: 0,
@@ -28,13 +26,11 @@ export default function PollOverlay({ question, options, onClose, latestComment 
     }).start();
   }, []);
 
-  // Auto-close after 30s
   useEffect(() => {
-    const t = setTimeout(() => handleClose(), 5000);
+    const t = setTimeout(() => handleClose(), 30_000);
     return () => clearTimeout(t);
   }, []);
 
-  // Parse incoming AI comments and tally votes
   useEffect(() => {
     if (!latestComment) return;
     const lower = latestComment.toLowerCase();
@@ -65,7 +61,6 @@ export default function PollOverlay({ question, options, onClose, latestComment 
   return (
     <Animated.View style={[styles.container, { transform: [{ translateX: slideAnim }] }]}>
       <View style={styles.card}>
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.pollBadge}>
             <Text style={styles.pollBadgeText}>📊 POLL</Text>
@@ -75,10 +70,8 @@ export default function PollOverlay({ question, options, onClose, latestComment 
           </TouchableOpacity>
         </View>
 
-        {/* Question */}
         <Text style={styles.question}>{question}</Text>
 
-        {/* Options */}
         {options.map((opt, i) => {
           const p = pct(i);
           const isWinning = totalVotes > 0 && i === winnerIdx;
@@ -105,7 +98,6 @@ export default function PollOverlay({ question, options, onClose, latestComment 
           );
         })}
 
-        {/* Footer */}
         <Text style={styles.footer}>
           {totalVotes} vote{totalVotes !== 1 ? "s" : ""} · reacting live
         </Text>
@@ -119,84 +111,109 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 110,
     left: SPACING.md,
-    width: 220,
+    width: 240,
     zIndex: 100,
   },
   card: {
-    borderRadius: RADII.lg,
-    padding: SPACING.md,
-    backgroundColor: "rgba(0,0,0,0.82)",
+    borderRadius: RADII.xl,
+    padding: SPACING.lg,
+    backgroundColor: COLORS.glassDark,
     borderWidth: 1,
     borderColor: COLORS.glassBorder,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.45,
+    shadowRadius: 20,
+    elevation: 12,
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: SPACING.sm,
+    marginBottom: SPACING.md,
   },
   pollBadge: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: COLORS.accent,
     borderRadius: RADII.full,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 2,
+    paddingHorizontal: SPACING.sm + 2,
+    paddingVertical: 3,
   },
   pollBadgeText: {
     fontSize: 10,
     fontWeight: WEIGHTS.heavy,
     color: "#fff",
-    letterSpacing: 1,
+    letterSpacing: 1.2,
   },
   closeBtn: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "rgba(255,255,255,0.1)",
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "rgba(255,255,255,0.08)",
     alignItems: "center",
     justifyContent: "center",
   },
-  closeBtnText: { fontSize: 11, color: "rgba(255,255,255,0.6)", fontWeight: WEIGHTS.bold },
+  closeBtnText: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.5)",
+    fontWeight: WEIGHTS.bold,
+  },
   question: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: WEIGHTS.bold,
     color: "#fff",
-    marginBottom: SPACING.md,
-    lineHeight: 18,
+    marginBottom: SPACING.lg,
+    lineHeight: 20,
+    letterSpacing: 0.2,
   },
-  optionWrap: { marginBottom: SPACING.sm },
+  optionWrap: {
+    marginBottom: SPACING.md,
+  },
   optionRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 4,
+    alignItems: "center",
+    marginBottom: 6,
   },
   optionLabel: {
     fontSize: 12,
     fontWeight: WEIGHTS.semibold,
-    color: "rgba(255,255,255,0.75)",
+    color: "rgba(255,255,255,0.7)",
   },
-  optionLabelWinning: { color: "#fff" },
+  optionLabelWinning: {
+    color: "#fff",
+  },
   optionPct: {
     fontSize: 12,
     fontWeight: WEIGHTS.bold,
-    color: "rgba(255,255,255,0.5)",
+    color: "rgba(255,255,255,0.45)",
   },
-  optionPctWinning: { color: COLORS.accent },
+  optionPctWinning: {
+    color: COLORS.accent,
+  },
   barBg: {
-    height: 6,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    borderRadius: 3,
+    height: 7,
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderRadius: RADII.full,
     overflow: "hidden",
   },
   barFill: {
     height: "100%",
-    backgroundColor: COLORS.primaryLight,
-    borderRadius: 3,
+    backgroundColor: COLORS.surfaceLight,
+    borderRadius: RADII.full,
   },
-  barFillWinning: { backgroundColor: COLORS.accent },
+  barFillWinning: {
+    backgroundColor: COLORS.accent,
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    elevation: 2,
+  },
   footer: {
     fontSize: 10,
-    color: "rgba(255,255,255,0.35)",
+    color: "rgba(255,255,255,0.3)",
     marginTop: SPACING.sm,
     textAlign: "right",
+    letterSpacing: 0.3,
   },
 });

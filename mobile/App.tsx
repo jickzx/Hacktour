@@ -3,7 +3,7 @@
  * Sets global default text colour so every screen inherits white-on-dark.
  */
 import { useState, useCallback, useEffect } from "react";
-import { View, StyleSheet, Text, Platform } from "react-native";
+import { View, StyleSheet } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import AIEditScreen from "./src/screens/AIEditScreen";
 import LiveStreamScreen from "./src/screens/LiveStreamScreen";
@@ -30,19 +30,6 @@ export type AssistantAction = {
   preset?: "default" | "chill" | "hype" | "deep" | "chipmunk";
   language?: string;
 };
-
-/** Force all Text nodes to default to white so dark-mode screens don't need per-component colour props */
-(function applyGlobalTextColor() {
-  const TextAny = Text as any;
-  TextAny.defaultProps = TextAny.defaultProps || {};
-  TextAny.defaultProps.style = [
-    {
-      color: COLORS.text,
-      fontFamily: Platform.OS === "ios" ? "System" : undefined,
-    },
-    TextAny.defaultProps.style,
-  ];
-})();
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("edit");

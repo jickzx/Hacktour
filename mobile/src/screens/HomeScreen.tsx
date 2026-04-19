@@ -1,8 +1,6 @@
 /**
- * HomeScreen — XHS dark explore feed.
- * Top: real AI-edited clips from the user (via /api/clips).
- * Body: hardcoded authentic XHS posts — screenshot images where clean,
- * styled gradient cards for multi-post screenshots that don't crop well.
+ * HomeScreen — XHS-inspired dark explore feed with masonry grid.
+ * Real AI-edited clips interleaved with curated lifestyle posts.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -16,7 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS } from "../constants/theme";
+import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS, SHADOWS } from "../constants/theme";
 import { listClips } from "../services/api";
 
 const TOP_TABS = ["Following", "Explore", "Nearby"] as const;
@@ -68,146 +66,90 @@ const PALETTE: [string, string][] = [
 
 const STATIC_POSTS: Post[] = [
   {
-    id: "f1",
-    title: "🇬🇧 伦敦😌市中心 £19.9 无限日料自助",
-    author: "伦敦食记与小动物",
-    likes: 401,
-    ratio: 1.4,
-    tintA: "#5C3D2E", tintB: "#3A1F0F",
-    isVideo: true,
+    id: "f1", title: "🇬🇧 伦敦😌市中心 £19.9 无限日料自助",
+    author: "伦敦食记与小动物", likes: 401, ratio: 1.4,
+    tintA: "#5C3D2E", tintB: "#3A1F0F", isVideo: true,
     gradientCard: {
-      topColor: "#1A0F08",
-      bottomColor: "#4A2010",
-      label: "🇬🇧 伦敦探店",
-      mainText: "£19.9\n随便吃\n日料自助 🍣",
-      textColor: "#FFD580",
+      topColor: "#1A0F08", bottomColor: "#4A2010",
+      label: "🇬🇧 伦敦探店", mainText: "£19.9\n随便吃\n日料自助 🍣", textColor: "#FFD580",
     },
   },
   {
-    id: "f2",
-    title: "4月可是 SummerIntern 捡漏黄金期！",
-    author: "是个上岸栗子",
-    likes: 21,
-    ratio: 1.334,
+    id: "f2", title: "4月可是 SummerIntern 捡漏黄金期！",
+    author: "是个上岸栗子", likes: 21, ratio: 1.334,
     tintA: "#B8D4E8", tintB: "#A0C4E0",
     imageSource: require("../../assets/posts/summerintern.png"),
   },
   {
-    id: "f3",
-    title: "claude code 的团队模式真的赶快用！！！",
-    author: "jesse-菲美信息",
-    likes: 1276,
-    ratio: 1.391,
+    id: "f3", title: "claude code 的团队模式真的赶快用！！！",
+    author: "jesse-菲美信息", likes: 1276, ratio: 1.391,
     tintA: "#1A1A2E", tintB: "#0D0D1A",
     imageSource: require("../../assets/posts/claude-code.png"),
   },
   {
-    id: "f4",
-    title: "一眼认出🇭🇰香港男生❗揭秘3个超明显特征！",
-    author: "钓仔沪上飘",
-    likes: 1837,
-    ratio: 1.45,
-    tintA: "#C84820", tintB: "#801A00",
-    isVideo: true,
+    id: "f4", title: "一眼认出🇭🇰香港男生❗揭秘3个超明显特征！",
+    author: "钓仔沪上飘", likes: 1837, ratio: 1.45,
+    tintA: "#C84820", tintB: "#801A00", isVideo: true,
     gradientCard: {
-      topColor: "#0D0500",
-      bottomColor: "#7A2008",
-      label: "🇭🇰 香港人",
-      mainText: "香港男生\n为什么\n一眼就认出？",
-      textColor: "#FFE080",
+      topColor: "#0D0500", bottomColor: "#7A2008",
+      label: "🇭🇰 香港人", mainText: "香港男生\n为什么\n一眼就认出？", textColor: "#FFE080",
     },
   },
   {
-    id: "f5",
-    title: "rag 已死",
-    author: "李洛克",
-    likes: 1489,
-    ratio: 1.05,
+    id: "f5", title: "rag 已死", author: "李洛克", likes: 1489, ratio: 1.05,
     tintA: "#F8D0D0", tintB: "#E8A0A0",
     textCard: {
-      bg: "#FFF0F0",
-      textColor: "#8B2020",
-      secondaryText: "MAR.31",
-      cardText: "我宣布，\nRAG 已死\n😤",
+      bg: "#FFF0F0", textColor: "#8B2020",
+      secondaryText: "MAR.31", cardText: "我宣布，\nRAG 已死\n😤",
     },
   },
   {
-    id: "f6",
-    title: "Title 越短，越大佬",
-    author: "3 Sigma IBD...",
-    likes: 2556,
-    ratio: 1.25,
+    id: "f6", title: "Title 越短，越大佬", author: "3 Sigma IBD...", likes: 2556, ratio: 1.25,
     tintA: "#1A2A3E", tintB: "#0A1828",
     gradientCard: {
-      topColor: "#050D18",
-      bottomColor: "#1A3058",
-      label: "职场 · 大佬学",
-      mainText: "Title 越短\n越大佬",
-      textColor: "#A8C8FF",
+      topColor: "#050D18", bottomColor: "#1A3058",
+      label: "职场 · 大佬学", mainText: "Title 越短\n越大佬", textColor: "#A8C8FF",
     },
   },
   {
-    id: "f7",
-    title: "手抓拉塞尔F1真车 | 帝国理工造赛车年 vlog",
-    author: "艾仔壳",
-    likes: 4893,
-    ratio: 1.323,
-    tintA: "#1A3050", tintB: "#0A1828",
-    isVideo: true,
+    id: "f7", title: "手抓拉塞尔F1真车 | 帝国理工造赛车年 vlog",
+    author: "艾仔壳", likes: 4893, ratio: 1.323,
+    tintA: "#1A3050", tintB: "#0A1828", isVideo: true,
     imageSource: require("../../assets/posts/imperial-f1.png"),
   },
   {
-    id: "f8",
-    title: "上海 00后 UCL 海归情侣 今天身价多少钱",
-    author: "拜托了姐妹",
-    likes: 1492,
-    ratio: 1.355,
-    tintA: "#E8D4C0", tintB: "#C4A882",
-    isVideo: true,
+    id: "f8", title: "上海 00后 UCL 海归情侣 今天身价多少钱",
+    author: "拜托了姐妹", likes: 1492, ratio: 1.355,
+    tintA: "#E8D4C0", tintB: "#C4A882", isVideo: true,
     imageSource: require("../../assets/posts/ucl-couple.png"),
   },
   {
-    id: "f9",
-    title: "Cambridge · Harvard · Yale 大佬背景大赏",
-    author: "又逢春",
-    likes: 136,
-    ratio: 1.340,
+    id: "f9", title: "Cambridge · Harvard · Yale 大佬背景大赏",
+    author: "又逢春", likes: 136, ratio: 1.340,
     tintA: "#B0C8E8", tintB: "#8AAAC8",
     imageSource: require("../../assets/posts/linkedin-dalao.png"),
   },
   {
-    id: "f10",
-    title: "求求了😭香港中学真的不是你想进就能进！",
-    author: "欣益妈国际教育说",
-    likes: 236,
-    ratio: 1.339,
+    id: "f10", title: "求求了😭香港中学真的不是你想进就能进！",
+    author: "欣益妈国际教育说", likes: 236, ratio: 1.339,
     tintA: "#E8D4D4", tintB: "#C8A0A0",
     imageSource: require("../../assets/posts/hk-school.png"),
   },
   {
-    id: "f11",
-    title: "剑桥 IC offer holder 被 UCL 拒绝",
-    author: "乘一点耐心一点",
-    likes: 131,
-    ratio: 1.359,
+    id: "f11", title: "剑桥 IC offer holder 被 UCL 拒绝",
+    author: "乘一点耐心一点", likes: 131, ratio: 1.359,
     tintA: "#C8D8E8", tintB: "#98B0C8",
     imageSource: require("../../assets/posts/ucas-offers.png"),
   },
   {
-    id: "f12",
-    title: "港大生在 J.P. Morgan 被狠狠上了一课🥲",
-    author: "11是伊伊",
-    likes: 401,
-    ratio: 1.337,
+    id: "f12", title: "港大生在 J.P. Morgan 被狠狠上了一课🥲",
+    author: "11是伊伊", likes: 401, ratio: 1.337,
     tintA: "#1A1A2E", tintB: "#0D0D1A",
     imageSource: require("../../assets/posts/jpmorgan.png"),
   },
   {
-    id: "f13",
-    title: "港三本有任何机会进 Goldman Sachs 吗？",
-    author: "港漂打工人",
-    likes: 892,
-    ratio: 1.312,
+    id: "f13", title: "港三本有任何机会进 Goldman Sachs 吗？",
+    author: "港漂打工人", likes: 892, ratio: 1.312,
     tintA: "#C8D8E8", tintB: "#98B8D8",
     imageSource: require("../../assets/posts/goldman-question.png"),
   },
@@ -216,15 +158,9 @@ const STATIC_POSTS: Post[] = [
 function clipToPost(clip: ApiClip): Post {
   const [tintA, tintB] = PALETTE[clip.id.charCodeAt(0) % PALETTE.length];
   return {
-    id: `clip-${clip.id}`,
-    title: clip.prompt || "AI Edit",
-    author: "你 (Stream Mind)",
-    likes: 0,
-    ratio: 1.2,
-    tintA,
-    tintB,
-    isVideo: true,
-    isClip: true,
+    id: `clip-${clip.id}`, title: clip.prompt || "AI Edit",
+    author: "你 (Stream Mind)", likes: 0, ratio: 1.2,
+    tintA, tintB, isVideo: true, isClip: true,
   };
 }
 
@@ -240,7 +176,6 @@ export default function HomeScreen() {
       const clips = await listClips();
       setClipPosts(clips.map(clipToPost));
     } catch {
-      // silently ignore
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -248,7 +183,6 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-
   const onRefresh = useCallback(() => { setRefreshing(true); loadAll(); }, [loadAll]);
 
   const allPosts = useMemo(() => {
@@ -308,7 +242,7 @@ export default function HomeScreen() {
         <View style={styles.clipBanner}>
           <View style={styles.clipBannerDot} />
           <Text style={styles.clipBannerText}>
-            {clipPosts.length} AI edit{clipPosts.length !== 1 ? "s" : ""} you created are live in your feed
+            {clipPosts.length} AI edit{clipPosts.length !== 1 ? "s" : ""} live in your feed
           </Text>
         </View>
       )}
@@ -342,13 +276,8 @@ function PostCard({ post }: { post: Post }) {
   return (
     <TouchableOpacity style={styles.card} activeOpacity={0.85}>
       <View style={[styles.thumbWrap, { aspectRatio: 1 / post.ratio }]}>
-
         {post.imageSource ? (
-          <Image
-            source={post.imageSource}
-            style={{ width: "100%", height: "100%" }}
-            resizeMode="cover"
-          />
+          <Image source={post.imageSource} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
         ) : post.gradientCard ? (
           <View style={[StyleSheet.absoluteFill, { backgroundColor: post.gradientCard.topColor }]}>
             <View style={[StyleSheet.absoluteFill, { backgroundColor: post.gradientCard.bottomColor, opacity: 0.6 }]} />
@@ -398,13 +327,15 @@ function PostCard({ post }: { post: Post }) {
         )}
       </View>
 
-      <Text style={styles.cardTitle} numberOfLines={2}>{post.title}</Text>
-      <View style={styles.cardMeta}>
-        <View style={[styles.avatar, post.isClip && styles.avatarClip]} />
-        <Text style={styles.cardAuthor} numberOfLines={1}>{post.author}</Text>
-        <Text style={[styles.cardLike, post.isClip && styles.cardLikeClip]}>
-          ♡ {fmtLikes(post.likes)}
-        </Text>
+      <View style={styles.cardBody}>
+        <Text style={styles.cardTitle} numberOfLines={2}>{post.title}</Text>
+        <View style={styles.cardMeta}>
+          <View style={[styles.avatar, post.isClip && styles.avatarClip]} />
+          <Text style={styles.cardAuthor} numberOfLines={1}>{post.author}</Text>
+          <Text style={[styles.cardLike, post.isClip && styles.cardLikeClip]}>
+            ♡ {fmtLikes(post.likes)}
+          </Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -442,7 +373,7 @@ const styles = StyleSheet.create({
   clipBanner: {
     flexDirection: "row", alignItems: "center", gap: SPACING.sm,
     paddingHorizontal: SPACING.lg, paddingVertical: SPACING.sm,
-    backgroundColor: "rgba(255,36,66,0.08)",
+    backgroundColor: COLORS.primaryBg,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "rgba(255,36,66,0.2)",
   },
   clipBannerDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.primary },
@@ -459,41 +390,31 @@ const styles = StyleSheet.create({
   grid: { flexDirection: "row", gap: SPACING.sm },
   col: { flex: 1, gap: SPACING.md },
 
-  card: { width: "100%", alignSelf: "stretch", borderRadius: RADII.md, overflow: "hidden" },
+  card: {
+    width: "100%", alignSelf: "stretch",
+    borderRadius: RADII.md, overflow: "hidden",
+    backgroundColor: COLORS.surface,
+    ...SHADOWS.card,
+  },
   thumbWrap: { width: "100%", alignSelf: "stretch", borderRadius: RADII.md, overflow: "hidden" },
+  cardBody: { paddingHorizontal: SPACING.xs, paddingTop: SPACING.sm, paddingBottom: SPACING.sm },
 
   gradientCardInner: {
     ...StyleSheet.absoluteFillObject,
-    padding: SPACING.md,
-    justifyContent: "flex-end",
-    paddingBottom: SPACING.lg,
+    padding: SPACING.md, justifyContent: "flex-end", paddingBottom: SPACING.lg,
   },
   gradientLabel: {
-    fontSize: 10,
-    fontWeight: WEIGHTS.semibold,
-    letterSpacing: 0.6,
-    opacity: 0.8,
-    marginBottom: SPACING.xs,
+    fontSize: 10, fontWeight: WEIGHTS.semibold, letterSpacing: 0.6,
+    opacity: 0.8, marginBottom: SPACING.xs,
   },
-  gradientMain: {
-    fontSize: 18,
-    fontWeight: WEIGHTS.bold,
-    lineHeight: 26,
-  },
+  gradientMain: { fontSize: 18, fontWeight: WEIGHTS.bold, lineHeight: 26 },
 
   textCardWrap: { padding: SPACING.md, justifyContent: "center" },
   textCardSecondary: {
-    fontSize: FONT_SIZES.xs,
-    fontWeight: WEIGHTS.medium,
-    opacity: 0.55,
-    marginBottom: SPACING.xs,
-    letterSpacing: 0.4,
+    fontSize: FONT_SIZES.xs, fontWeight: WEIGHTS.medium,
+    opacity: 0.55, marginBottom: SPACING.xs, letterSpacing: 0.4,
   },
-  textCardMain: {
-    fontSize: 14,
-    fontWeight: WEIGHTS.bold,
-    lineHeight: 21,
-  },
+  textCardMain: { fontSize: 14, fontWeight: WEIGHTS.bold, lineHeight: 21 },
 
   badge: {
     position: "absolute", top: 8, left: 8,
@@ -503,7 +424,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.55)",
   },
   badgeClip: { backgroundColor: COLORS.primary },
-  badgeLive: { left: "auto" as any, right: 8, backgroundColor: COLORS.primary },
+  badgeLive: { left: undefined, right: 8, backgroundColor: COLORS.primary },
   badgeText: { fontSize: 9, color: "#FFFFFF", fontWeight: WEIGHTS.bold, letterSpacing: 0.6 },
   liveDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: "#FFFFFF" },
 
@@ -517,11 +438,11 @@ const styles = StyleSheet.create({
 
   cardTitle: {
     fontSize: FONT_SIZES.md, color: COLORS.text, fontWeight: WEIGHTS.medium,
-    paddingHorizontal: SPACING.xs, paddingTop: SPACING.sm, lineHeight: 18,
+    lineHeight: 18,
   },
   cardMeta: {
     flexDirection: "row", alignItems: "center",
-    paddingHorizontal: SPACING.xs, paddingTop: SPACING.xs, paddingBottom: SPACING.sm, gap: 6,
+    paddingTop: SPACING.xs, gap: 6,
   },
   avatar: { width: 18, height: 18, borderRadius: 9, backgroundColor: COLORS.surfaceLight },
   avatarClip: { backgroundColor: COLORS.primary },

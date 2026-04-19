@@ -1,9 +1,9 @@
 /**
- * BottomNavBar — XHS-style 5-slot tab bar.
+ * BottomNavBar — XHS-style 5-slot tab bar with elevated FAB.
  * Slots: Home | Library | [Live FAB] | Edit | Profile
  */
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { COLORS, RADII, SPACING, WEIGHTS } from "../constants/theme";
+import { COLORS, RADII, SPACING, WEIGHTS, SHADOWS, SAFE_BOTTOM } from "../constants/theme";
 
 export type Tab = "home" | "library" | "edit" | "live" | "settings";
 
@@ -12,20 +12,44 @@ interface BottomNavBarProps {
   onTabPress: (tab: Tab) => void;
 }
 
+const TABS: { tab: Tab; icon: string; label: string }[] = [
+  { tab: "home", icon: "⌂", label: "Home" },
+  { tab: "library", icon: "▦", label: "Library" },
+  { tab: "edit", icon: "✂", label: "Edit" },
+  { tab: "settings", icon: "◔", label: "Profile" },
+];
+
 export default function BottomNavBar({ activeTab, onTabPress }: BottomNavBarProps) {
   return (
     <View style={styles.wrap} pointerEvents="box-none">
       <View style={styles.bar}>
-        <NavItem icon="⌂" label="Home" active={activeTab === "home"} onPress={() => onTabPress("home")} />
-        <NavItem icon="▦" label="Library" active={activeTab === "library"} onPress={() => onTabPress("library")} />
+        {TABS.slice(0, 2).map(({ tab, icon, label }) => (
+          <NavItem
+            key={tab}
+            icon={icon}
+            label={label}
+            active={activeTab === tab}
+            onPress={() => onTabPress(tab)}
+          />
+        ))}
 
-        {/* Centre FAB — always navigates to Live */}
-        <TouchableOpacity style={styles.fab} onPress={() => onTabPress("live")} activeOpacity={0.85}>
+        <TouchableOpacity
+          style={[styles.fab, activeTab === "live" && styles.fabActive]}
+          onPress={() => onTabPress("live")}
+          activeOpacity={0.85}
+        >
           <Text style={styles.fabIcon}>+</Text>
         </TouchableOpacity>
 
-        <NavItem icon="✂" label="Edit" active={activeTab === "edit"} onPress={() => onTabPress("edit")} />
-        <NavItem icon="◔" label="Profile" active={false} onPress={() => onTabPress("home")} />
+        {TABS.slice(2).map(({ tab, icon, label }) => (
+          <NavItem
+            key={tab}
+            icon={icon}
+            label={label}
+            active={activeTab === tab}
+            onPress={() => onTabPress(tab)}
+          />
+        ))}
       </View>
     </View>
   );
@@ -49,31 +73,51 @@ const styles = StyleSheet.create({
   bar: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: COLORS.background,
+    justifyContent: "space-around",
+    backgroundColor: COLORS.surface,
     paddingHorizontal: SPACING.md,
     paddingTop: SPACING.sm,
-    paddingBottom: 28,
+    paddingBottom: SAFE_BOTTOM,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: COLORS.border,
+    borderTopColor: COLORS.borderLight,
   },
-  tab: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: SPACING.xs },
-  icon: { fontSize: 22, color: COLORS.textMuted, fontWeight: WEIGHTS.medium },
+  tab: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: SPACING.xs,
+  },
+  icon: {
+    fontSize: 22,
+    color: COLORS.textMuted,
+    fontWeight: WEIGHTS.medium,
+  },
   iconActive: { color: COLORS.text },
-  label: { fontSize: 11, color: COLORS.textMuted, fontWeight: WEIGHTS.medium, marginTop: 2, letterSpacing: 0.2 },
+  label: {
+    fontSize: 10,
+    color: COLORS.textMuted,
+    fontWeight: WEIGHTS.medium,
+    marginTop: 2,
+    letterSpacing: 0.2,
+  },
   labelActive: { color: COLORS.text, fontWeight: WEIGHTS.semibold },
   fab: {
-    width: 56,
-    height: 40,
+    width: 52,
+    height: 36,
     borderRadius: RADII.md,
     backgroundColor: COLORS.primary,
     alignItems: "center",
     justifyContent: "center",
-    marginHorizontal: SPACING.sm,
-    shadowColor: COLORS.primary,
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
+    marginHorizontal: SPACING.xs,
+    ...SHADOWS.fab,
   },
-  fabIcon: { fontSize: 28, color: "#FFFFFF", fontWeight: WEIGHTS.light, lineHeight: 30 },
+  fabActive: {
+    backgroundColor: COLORS.primaryDark,
+  },
+  fabIcon: {
+    fontSize: 28,
+    color: "#FFFFFF",
+    fontWeight: WEIGHTS.light,
+    lineHeight: 30,
+  },
 });

@@ -10,7 +10,6 @@ async function safeJson(res: Response) {
   try {
     return JSON.parse(text);
   } catch {
-    // HTML responses start with '<' — give a clear message rather than a raw parse error
     const preview = text.slice(0, 60).trim();
     throw new Error(
       preview.startsWith("<")
@@ -18,30 +17,6 @@ async function safeJson(res: Response) {
         : `Bad response from server: ${preview}`
     );
   }
-}
-
-export async function fetchHealth() {
-  const res = await fetch(`${API_BASE}/api/health`);
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return safeJson(res);
-}
-
-/** Sends clips with thumbnails and prompt to the AI edit endpoint */
-export async function generateEdit(
-  prompt: string,
-  clips: { name: string; duration: number; thumbnail?: string }[]
-) {
-  const res = await fetch(`${API_BASE}/api/edit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, clips }),
-  });
-
-  const data = await safeJson(res);
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || `API error: ${res.status}`);
-  }
-  return { composition: data.composition, clipId: data.clipId as string | undefined };
 }
 
 /** Uploads actual video files, processes them with ffmpeg, returns processed video URL */
@@ -67,23 +42,6 @@ export async function processEdit(
   return { videoUrl: `${API_BASE}${data.videoUrl}`, composition: data.composition, clipId: data.clipId };
 }
 
-/** Saves a generated clip to the library */
-export async function saveClip(payload: {
-  prompt: string;
-  composition: object;
-  sourceVideoUrl: string;
-  durationSeconds?: number;
-}) {
-  const res = await fetch(`${API_BASE}/api/clips`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await safeJson(res);
-  if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
-  return data.clip;
-}
-
 /** Returns all saved clips from the library, newest first */
 export async function listClips() {
   const res = await fetch(`${API_BASE}/api/clips`);
@@ -102,18 +60,6 @@ export async function searchClips(query: string, limit = 10) {
   const data = await safeJson(res);
   if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
   return data.results;
-}
-
-/** Fetches AI-generated XHS-style trending Chinese feed posts */
-export async function fetchFeed(): Promise<{
-  id: string; title: string; author: string; likes: number;
-  ratio: number; tintA: string; tintB: string;
-  isVideo?: boolean; isLive?: boolean; tag?: string;
-}[]> {
-  const res = await fetch(`${API_BASE}/api/feed`);
-  const data = await safeJson(res);
-  if (!res.ok || !data.success) throw new Error(data.error || `API error: ${res.status}`);
-  return data.posts;
 }
 
 export interface Photo {

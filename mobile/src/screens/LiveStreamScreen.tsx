@@ -23,6 +23,19 @@ import { AudioModule, RecordingPresets, requestRecordingPermissionsAsync, setAud
 import * as Speech from "expo-speech";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SPACING, RADII, WEIGHTS } from "../constants/theme";
+import {
+  AUDIO_CHUNK_MS,
+  FRAME_INTERVAL_MS,
+  WAKE_WORDS,
+  PANDA_STOP_RE,
+  APP_CONTROL_RE,
+  PANDA_COMMANDS,
+  MAX_POSES,
+  READY_TIMEOUT_MS,
+  READY_RE,
+  STOP_RE,
+  type Comment,
+} from "../constants/pandaConfig";
 import type { AssistantAction } from "../../App";
 import PollOverlay from "../components/PollOverlay";
 import ClipOverlay from "../components/ClipOverlay";
@@ -30,59 +43,12 @@ import { searchClips, uploadPhoto, editPhoto, identifyOutfit, OutfitItem, proces
 import { BACKEND_URL } from "../services/backendUrl";
 import { ensureHumanLikeVoice, getVoicePresetPatch, getVoiceSettings, loadVoiceSettings, subscribeVoiceSettings, updateVoiceSettings } from "../services/voiceSettings";
 
-// ─── Config ───────────────────────────────────────────────────────────────────
-
-
-const AUDIO_CHUNK_MS = 3000;
-const FRAME_INTERVAL_MS = 7000;
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface Comment {
-  id: string;
-  user: string;
-  text: string;
-  avatar: string;
-  isTranscript?: boolean;
-  link?: string;
-}
-
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const { height: SCREEN_H } = Dimensions.get("window");
 
-// Wake word variants — "panda", "hey panda", "ok panda", "yo panda", "panda go"
-const WAKE_WORDS = /(?:^|\s)(hey\s+panda|ok\s+panda|yo\s+panda|panda\s+go|panda)(?:\s|,|!|$)/i;
-const PANDA_STOP_RE = /(?:^|\s)(?:hey\s+)?panda\s+stop(?:\s|,|!|\.|$)/i;
-const APP_CONTROL_RE = /\b(go live|end stream|mute|unmute|flip camera|emoji mode|hype|shoutout|countdown|create poll|close poll|go to|open|take my photo|take pictures|photo shoot|what am i wearing|rate my fit|find my outfit|change your voice|change voice|pull up|show .*clip|play .*clip|find .*clip)\b/i;
 
-const PANDA_COMMANDS = [
-  { cmd: "hey panda go live", desc: "Start the stream" },
-  { cmd: "hey panda end stream", desc: "End the stream" },
-  { cmd: "hey panda mute", desc: "Mute your mic" },
-  { cmd: "hey panda unmute", desc: "Unmute your mic" },
-  { cmd: "hey panda flip camera", desc: "Switch front/back cam" },
-  { cmd: "hey panda emoji mode", desc: "Toggle emoji-only chat" },
-  { cmd: "hey panda hype", desc: "Blast hype into chat" },
-  { cmd: "hey panda shoutout [user]", desc: "Shout out a viewer" },
-  { cmd: "hey panda countdown 5", desc: "Start a countdown" },
-  { cmd: "hey panda create poll cats or dogs", desc: "Start a chat poll" },
-  { cmd: "hey panda close poll", desc: "Dismiss active poll" },
-  { cmd: "hey panda go to edit", desc: "Navigate to edit tab" },
-  { cmd: "hey panda take my photo", desc: "Start a guided photo shoot" },
-  { cmd: "hey panda change your voice", desc: "Switch Panda's saved voice" },
-  { cmd: "hey panda what am I wearing", desc: "Identify outfit + shop links" },
-];
-
-// Hard cap on pictures per "take photos of me" request
-const MAX_POSES = 10;
-// How long to wait for the streamer to say "yes/ready" before auto-snapping
-const READY_TIMEOUT_MS = 22000;
-// Phrases that count as "take the shot"
-const READY_RE = /\b(yes|yep|yeah|yup|ready|go|shoot|take it|take the (shot|photo|picture)|do it|i'?m ready|ok|okay|sure)\b/i;
-// Phrases that end the photo session early
-const STOP_RE = /\b(stop|cancel|never\s*mind|no more|abort|that'?s enough|enough|done)\b/i;
 
 interface Props {
   onAssistantAction: (action: AssistantAction) => void;
@@ -1228,6 +1194,7 @@ Do not use JSON.` }],
           style={StyleSheet.absoluteFill}
           facing={facing}
           mode={photoSession ? "picture" : "video"}
+          mute={true}
         />
       ) : (
         <View style={[StyleSheet.absoluteFill, styles.camFallback]}>
@@ -1804,7 +1771,7 @@ const styles = StyleSheet.create({
   chatInput: {
     flex: 1, height: 40, borderRadius: RADII.full,
     backgroundColor: "rgba(0,0,0,0.55)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+    borderWidth: 1, borderColor: COLORS.border,
     paddingHorizontal: SPACING.md, fontSize: 14, color: "#fff",
   },
   sendBtn: {

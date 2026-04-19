@@ -2,7 +2,7 @@
  * ClipCard — XHS-style post card for a saved clip.
  */
 import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS } from "../constants/theme";
+import { COLORS, FONT_SIZES, RADII, SPACING, WEIGHTS, SHADOWS } from "../constants/theme";
 
 const API_BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
@@ -49,8 +49,10 @@ export default function ClipCard({
         {thumbUri ? (
           <Image source={{ uri: thumbUri }} style={styles.thumbImg} resizeMode="cover" />
         ) : null}
-        <View style={styles.thumbOverlay}>
-          <Text style={styles.playIcon}>▶</Text>
+        <View style={styles.playOverlay}>
+          <View style={styles.playCircle}>
+            <Text style={styles.playIcon}>▶</Text>
+          </View>
         </View>
         <View style={styles.durationBadge}>
           <Text style={styles.durationText}>{formatDuration(durationSeconds)}</Text>
@@ -77,13 +79,15 @@ export default function ClipCard({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: RADII.md,
+    borderRadius: RADII.lg,
     overflow: "hidden",
+    backgroundColor: COLORS.surface,
+    ...SHADOWS.card,
   },
   thumb: {
     aspectRatio: 9 / 16,
     backgroundColor: COLORS.surfaceLight,
-    borderRadius: RADII.md,
+    borderRadius: RADII.lg,
     overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
@@ -91,38 +95,49 @@ const styles = StyleSheet.create({
   thumbImg: {
     ...StyleSheet.absoluteFillObject,
   },
-  thumbOverlay: {
+  playOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.25)",
+    backgroundColor: "rgba(0,0,0,0.18)",
+  },
+  playCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.25)",
   },
   playIcon: {
-    fontSize: 32,
-    color: "rgba(255,255,255,0.85)",
+    fontSize: 18,
+    color: "#fff",
+    marginLeft: 2,
   },
   durationBadge: {
     position: "absolute",
-    top: 8,
-    right: 8,
-    backgroundColor: "rgba(0,0,0,0.55)",
+    top: SPACING.sm,
+    right: SPACING.sm,
+    backgroundColor: "rgba(0,0,0,0.6)",
     borderRadius: RADII.full,
-    paddingHorizontal: 8,
+    paddingHorizontal: SPACING.sm,
     paddingVertical: 2,
   },
   durationText: {
     color: "#FFFFFF",
-    fontSize: 10,
+    fontSize: FONT_SIZES.xs,
     fontWeight: WEIGHTS.bold,
     letterSpacing: 0.4,
   },
   linkedBadge: {
     position: "absolute",
-    bottom: 8,
-    left: 8,
+    bottom: SPACING.sm,
+    left: SPACING.sm,
     backgroundColor: COLORS.primary,
     borderRadius: RADII.full,
-    paddingHorizontal: 8,
+    paddingHorizontal: SPACING.sm,
     paddingVertical: 2,
   },
   linkedText: {
@@ -135,17 +150,17 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.md,
     color: COLORS.text,
     fontWeight: WEIGHTS.medium,
-    paddingHorizontal: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
     paddingTop: SPACING.sm,
     lineHeight: 18,
   },
   meta: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
     paddingTop: SPACING.xs,
     paddingBottom: SPACING.sm,
-    gap: 6,
+    gap: SPACING.xs + 2,
   },
   avatar: {
     width: 18,
