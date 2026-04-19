@@ -1,4 +1,4 @@
-/** API service for communicating with the Stream Mind backend */
+/** API service for communicating with the PandaNote backend */
 import { BACKEND_URL as API_BASE } from "./backendUrl";
 
 /**

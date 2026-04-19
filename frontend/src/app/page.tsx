@@ -227,11 +227,10 @@ function Navbar({ lang, setLang }: { lang: Lang; setLang: (l: Lang) => void }) {
       transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
       className="fixed top-0 left-0 right-0 z-50"
       style={{
-        background: "linear-gradient(180deg, rgba(20, 6, 10, 0.88) 0%, rgba(10, 10, 11, 0.82) 100%)",
-        backdropFilter: "blur(20px)",
-        WebkitBackdropFilter: "blur(20px)",
-        borderBottom: "1px solid rgba(255, 36, 66, 0.2)",
-        boxShadow: "0 1px 0 0 rgba(255, 36, 66, 0.08), 0 4px 24px -4px rgba(0,0,0,0.5)",
+        background: "rgba(10, 10, 11, 0.7)",
+        backdropFilter: "blur(18px)",
+        WebkitBackdropFilter: "blur(18px)",
+        borderBottom: "1px solid var(--line)",
       }}
     >
       <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">

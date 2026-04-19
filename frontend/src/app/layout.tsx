@@ -13,12 +13,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Stream Mind — AI-Powered Live Streaming",
+  title: "PandaNote 熊猫书 — AI-Powered Live Streaming",
   description: "The future of live content creation. AI co-pilot, instant edits, viral clips — all in real-time.",
   manifest: "/manifest.json",
-  themeColor: "#000000",
+  themeColor: "#0A0A0B",
   openGraph: {
-    title: "Stream Mind — AI-Powered Live Streaming",
+    title: "PandaNote 熊猫书 — AI-Powered Live Streaming",
     description: "The future of live content creation. AI co-pilot, instant edits, viral clips — all in real-time.",
     type: "website",
   },

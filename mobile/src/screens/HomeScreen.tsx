@@ -144,7 +144,7 @@ function clipToPost(clip: ApiClip): Post {
   const [tintA, tintB] = PALETTE[clip.id.charCodeAt(0) % PALETTE.length];
   return {
     id: `clip-${clip.id}`, title: clip.prompt || "AI Edit",
-    author: "你 (Stream Mind)", likes: 0, ratio: 1.2,
+    author: "你 (熊猫书)", likes: 0, ratio: 1.2,
     tintA, tintB, isVideo: true, isClip: true,
   };
 }
