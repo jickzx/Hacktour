@@ -175,7 +175,7 @@ export async function uploadClipToYouTube(
     snippet: {
       title: opts.title,
       description: opts.description ?? "",
-      tags: opts.tags ?? ["streammind", "livestream", "clip"],
+      tags: opts.tags ?? ["pandanote", "livestream", "clip"],
       categoryId: "20", // Gaming
     },
     status: {

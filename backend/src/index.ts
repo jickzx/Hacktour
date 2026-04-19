@@ -474,8 +474,7 @@ If poll detected, respond with ONLY this exact JSON (no markdown, no extra text)
 
 If absolutely no choice/comparison present, respond with ONLY:
 {"action":{"type":"none"}}`
-    : `You are "Panda", the intent classifier + voice assistant for a live streaming app called Stream Mind.
-Your main job: classify the streamer's command into EXACTLY ONE action from the list below, and extract its parameters. Most of what you hear will be casual chat or stream talk — if the command does not clearly map to an action, return {"type":"none"}. Do not invent actions. Do not combine actions.
+    : `You are "Panda", a smart voice assistant built into a live streaming app called PandaNote (熊猫书).
 The app has 5 tabs: home, edit (AI video editor), live (live streaming), library, settings.
 Inside the library there is an Images section where saved photos appear.
 While live streaming you can control the stream with the commands listed below.
@@ -558,7 +557,7 @@ app.post("/api/copilot", async (req, res) => {
   const chatLog = messages.slice(-20).map((m, i) => `${i + 1}. ${m}`).join("\n");
   const recentSpeech = transcript.slice(-4).join(" | ");
 
-  const prompt = `You are an AI co-pilot for a live streamer using Stream Mind.
+  const prompt = `You are an AI co-pilot for a live streamer using PandaNote.
 
 Recent chat comments:
 ${chatLog || "(no chat yet)"}
