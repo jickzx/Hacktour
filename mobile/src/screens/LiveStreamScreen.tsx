@@ -7,6 +7,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Alert,
   Dimensions,
+  Image,
   Linking,
   Platform,
   ScrollView,
@@ -166,6 +167,7 @@ interface Comment {
   avatar: string;
   isTranscript?: boolean;
   link?: string;
+  gifUrl?: string;
 }
 
 
@@ -1550,6 +1552,41 @@ Rules:
     }
   }, [speak, pushComment, startVideoBuffer, stopVideoBuffer]); // eslint-disable-line
 
+  // ── GIF comment loop ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isLive) return;
+    const TENOR_KEY = "LIVDSRZULELA";
+    let cancelled = false;
+
+    async function fireGif() {
+      if (cancelled) return;
+      const context = transcriptContextRef.current.slice(-4).join(" ").trim();
+      if (!context) return;
+      try {
+        // Ask Gemini (via backend) for a search term — or just use Tenor directly with a keyword from context
+        const words = context.replace(/[^a-z0-9\s]/gi, " ").split(/\s+/).filter(w => w.length > 3);
+        if (!words.length) return;
+        const term = words.slice(-2).join(" ");
+        const url = `https://api.tenor.com/v1/search?q=${encodeURIComponent(term)}&key=${TENOR_KEY}&limit=8&contentfilter=medium&media_filter=minimal`;
+        const res = await fetch(url);
+        const json = await res.json() as any;
+        const results = json.results;
+        if (!results?.length || cancelled) return;
+        const pick = results[Math.floor(Math.random() * Math.min(5, results.length))];
+        const gifUrl = pick.media?.[0]?.gif?.url ?? pick.media?.[0]?.tinygif?.url ?? pick.media?.[0]?.mediumgif?.url;
+        if (!gifUrl || cancelled) return;
+        const names = ["😂 viewer", "🔥 chat", "💀 fan", "👀 viewer", "😭 chat"];
+        const name = names[Math.floor(Math.random() * names.length)];
+        pushComment({ id: `gif-${Date.now()}`, user: name, text: "", avatar: "🎭", gifUrl });
+      } catch {}
+    }
+
+    // Fire first one after a short delay, then every 20s
+    const first = setTimeout(fireGif, 8000);
+    const interval = setInterval(fireGif, 20000);
+    return () => { cancelled = true; clearTimeout(first); clearInterval(interval); };
+  }, [isLive]); // eslint-disable-line
+
   useEffect(() => {
     if (isTranscribing && isLive) {
       isAudioLoopRef.current = true;
@@ -1880,7 +1917,11 @@ Rules:
                       ]}>
                         {c.user}
                       </Text>
-                      <Text style={[styles.chatMsg, c.link && styles.chatMsgLink]}>{c.text}</Text>
+                      {c.gifUrl ? (
+                        <Image source={{ uri: c.gifUrl }} style={styles.chatGif} resizeMode="cover" />
+                      ) : (
+                        <Text style={[styles.chatMsg, c.link && styles.chatMsgLink]}>{c.text}</Text>
+                      )}
                     </View>
                   );
                   return (
@@ -2236,6 +2277,7 @@ const styles = StyleSheet.create({
   chatUserSelf: { color: COLORS.accent },
   chatUserTranscript: { color: "#facc15" },
   chatMsg: { fontSize: 13, color: "rgba(255,255,255,0.92)", lineHeight: 17 },
+  chatGif: { width: 140, height: 100, borderRadius: 8, marginTop: 4 },
   chatBubbleLink: { borderColor: COLORS.accent, backgroundColor: "rgba(6,214,160,0.15)" },
   chatMsgLink: { color: COLORS.accent, textDecorationLine: "underline", fontWeight: "700" },
   chatInputRow: { flexDirection: "row", gap: SPACING.sm, alignItems: "center" },
