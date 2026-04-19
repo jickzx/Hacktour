@@ -13,10 +13,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Hacktour",
-  description: "London Global Hacktour 2026",
+  title: "Stream Mind — AI-Powered Live Streaming",
+  description: "The future of live content creation. AI co-pilot, instant edits, viral clips — all in real-time.",
   manifest: "/manifest.json",
   themeColor: "#000000",
+  openGraph: {
+    title: "Stream Mind — AI-Powered Live Streaming",
+    description: "The future of live content creation. AI co-pilot, instant edits, viral clips — all in real-time.",
+    type: "website",
+  },
 };
 
 export default function RootLayout({
